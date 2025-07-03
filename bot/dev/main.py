@@ -6,7 +6,7 @@ from app.handlers import router
 
 
 async def main():
-    bot = Bot(token=' ') #ТОКЕН
+    bot = Bot(token='') #ТОКЕН
     dp = Dispatcher()
     dp.include_router(router)
     if not os.path.exists("downloads"):
