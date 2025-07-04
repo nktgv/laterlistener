@@ -7,8 +7,8 @@ from app.handlers import router
 
 
 async def main():
-    load_dotenv()
-    token = os.environ.get('BOT_TOKEN')
+    load_dotenv('.env.example')
+    token = os.getenv('BOT_TOKEN')
     if not token:
         raise ValueError('Переменная окружения BOT_TOKEN не задана!')
     bot = Bot(token=token) #ТОКЕН
