@@ -1,2 +1,3 @@
 aiogram==3.7.0
 python-dotenv
+audio-extract
