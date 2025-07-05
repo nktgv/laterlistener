@@ -8,14 +8,14 @@ from app.handlers import router
 
 async def main():
     load_dotenv('.env.example')
-    token = os.getenv('BOT_TOKEN')
+    token = os.environ.get('BOT_TOKEN')
     if not token:
         raise ValueError('Переменная окружения BOT_TOKEN не задана!')
     bot = Bot(token=token) #ТОКЕН
     dp = Dispatcher()
     dp.include_router(router)
     if not os.path.exists("downloads"):
-        os.makedirs("bot/downloads")
+        os.makedirs("downloads")
     await dp.start_polling(bot)
 
 
