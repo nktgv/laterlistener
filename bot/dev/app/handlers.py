@@ -83,8 +83,8 @@ async def process_video(message: Message, file_id: str, file_type: str):
         
     file_format = get_video_format(file_path)
     if not file_format:
-        logging.error("Данный формат видео не поддерживается")
-        message.reply("Данный формат файла не поддерживается, отправьте другой файл")
+        logging.error(f"Данный формат видео не поддерживается: {os.path.splittext(file_path)[1]}")
+        message.reply(f"Данный формат файла не поддерживается: {os.path.splittext(file_path)[1]}. Отправьте другой файл")
         
     file_name = f"{file_type}_{message.from_user.id}_{file_id[:8]}{file_format}"
     save_path = os.path.join("videos", file_name)
