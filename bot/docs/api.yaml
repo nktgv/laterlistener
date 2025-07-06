@@ -1,0 +1,122 @@
+openapi: 3.0.1
+info:
+  title: FastAPI
+  version: 0.1.0
+paths:
+  /transcribe:
+    post:
+      summary: Start Transcribe
+      operationId: start_transcribe_transcribe_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TranscribeTask'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /status/{task_id}:
+    get:
+      summary: Get Transcribe Status
+      operationId: get_transcribe_status_status__task_id__get
+      parameters:
+        - name: task_id
+          in: path
+          description: ID of task to fetch
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskStatusResponse'
+  /result/{task_id}:
+    get:
+      summary: Get Transcribe Result
+      operationId: get_transcribe_result_result__task_id__get
+      parameters:
+        - name: task_id
+          in: path
+          description: ID of task to fetch
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+components:
+  schemas:
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    TranscribeTask:
+      properties:
+        id:
+          type: integer
+          title: Id
+        file_url:
+          type: string
+          title: File Url
+      type: object
+      required:
+        - id
+        - file_url
+      title: TranscribeTask
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+              - type: string
+              - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+        - loc
+        - msg
+        - type
+      title: ValidationError
+    TaskStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - WAIT
+            - RUNNING
+            - FINISHED
+          description: Status of the task
+      required:
+        - status
+      title: TaskStatusResponse
