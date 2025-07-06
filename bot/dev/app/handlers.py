@@ -67,7 +67,7 @@ async def handle_video(message: Message):
     await process_video(message, file_id, "video_note")
 
 # ОБРАБОТЧИК ФАЙЛОВ НЕ ЯВЛЯЮЩИХСЯ АУДИО ИЛИ ГС 
-@router.message(F.photo | F.document | F.text)
+@router.message(F.photo | F.document)
 async def handle_another_files(message: Message):
     await message.answer("Файл не является аудио или голосовым сообщением")
 
