@@ -15,7 +15,7 @@ async def main():
     dp = Dispatcher()
     dp.include_router(router)
     if not os.path.exists("downloads"):
-        os.makedirs("bot/downloads")
+        os.makedirs("downloads")
     await dp.start_polling(bot)
 
 
