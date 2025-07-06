@@ -71,11 +71,6 @@ async def handle_video(message: Message):
 async def handle_another_files(message: Message):
     await message.answer("Файл не является аудио или голосовым сообщением")
 
-
-'''
-    ЕСТЬ ПРОБЛЕМА С ТЕМ ЧТО МЕТОД GET_FILE() МОЖЕТ ПОЛУЧАТЬ ФАЙЛЫ НЕ БОЛЕЕ 20МБ
-    Я ХЗ ПОКА ЧТО КАК ЭТО ИСПРАВИТЬ, НО В ОСТАЛЬНОМ ОН ОБРАБАТЫВАЕМ НЕБОЛЬШИЕ ВИДЕО И КРУЖОЧКИ ТГ
-'''
 async def process_video(message: Message, file_id: str, file_type: str):
     logging.basicConfig(level=logging.INFO)
     bot = message.bot
