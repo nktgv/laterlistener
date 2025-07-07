@@ -25,10 +25,4 @@ def start_transcribe(task: TaskTranscribe):
         
         return response.status_code
     except requests.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка подключения: {e}")
-
-
-
-# result -> localhost/user1/task_id
-# status -> enum
-# trasncribe -> 
+        raise HTTPException(status_code=500, detail=f"Ошибка подключения: {e}") 
