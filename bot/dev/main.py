@@ -1,4 +1,6 @@
 from aiogram import Bot, Dispatcher
+from aiogram.client.telegram import TelegramAPIServer 
+from aiogram.client.session.aiohttp import AiohttpSession
 import asyncio
 import os
 from dotenv import load_dotenv
@@ -11,7 +13,8 @@ async def main():
     token = os.environ.get('BOT_TOKEN')
     if not token:
         raise ValueError('Переменная окружения BOT_TOKEN не задана!')
-    bot = Bot(token=token) #ТОКЕН
+    session = AiohttpSession(api=TelegramAPIServer.from_base("http://localhost:8081", is_local=True))
+    bot = Bot(token=token, session=session) #ТОКЕН
     dp = Dispatcher()
     dp.include_router(router)
     if not os.path.exists("downloads"):

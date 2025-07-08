@@ -1,8 +1,7 @@
 from typing import Optional
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from mutagen.wave import WAVE
-from aiogram.types import Message, LabeledPrice, PreCheckoutQuery
+from aiogram.types import Message, LabeledPrice, PreCheckoutQuery, InlineKeyboardMarkup, InlineKeyboardButton
 import os
 from aiogram.filters import CommandStart, Command
 from pydub import AudioSegment
@@ -10,9 +9,16 @@ from pydub.silence import detect_nonsilent
 import logging
 import app.keyboards as kb
 from audio_extract import extract_audio
+from datetime import datetime
+from app.db_storage import add_file_to_storage, upload_file_to_storage
+from app.requests import start_transcribe, get_status, get_result
+import time
+from app.utils.convert import export_dialog
 
 router = Router()
 
+file_url = ""
+end_file_name = ""
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -56,62 +62,98 @@ async def handle_video(message: Message):
     logging.info(f"Размер файла: {file_size}")
     max_size = 20 * 1024 * 1024
     if file_size < max_size:
-        await process_video(message, file_id, "video")
+        await process_video(message, file_id)
     else:
         await message.reply("Файл слишком большой, максимальный размер 20МБ, отправьте другой файл")
 
 # ОБРАБОТЧИК КРУЖОЧКОВ В ТГ
 @router.message(F.content_type == "video_note")
-async def handle_video(message: Message):
+async def handle_video_note(message: Message):
     file_id = message.video_note.file_id
-    await process_video(message, file_id, "video_note")
+    await process_video(message, file_id)
 
 # ОБРАБОТЧИК ФАЙЛОВ НЕ ЯВЛЯЮЩИХСЯ АУДИО ИЛИ ГС 
 @router.message(F.photo | F.document)
 async def handle_another_files(message: Message):
     await message.answer("Файл не является аудио или голосовым сообщением")
 
-async def process_video(message: Message, file_id: str, file_type: str):
+async def process_video(message: Message, file_id: str):
+    global file_url
+    global end_file_name
     logging.basicConfig(level=logging.INFO)
     bot = message.bot
     file = await bot.get_file(file_id)
     file_path = file.file_path
 
-    if not os.path.exists('videos'):
-        os.makedirs('videos')
-        logging.info("Создана директория для видео")
-        
     file_format = get_video_format(file_path)
     if not file_format:
         logging.error(f"Данный формат видео не поддерживается: {file_path}")
         message.reply("Данный формат файла не поддерживается. Отправьте другой файл")
-        
-    file_name = f"{file_type}_{message.from_user.id}_{file_id[:8]}{file_format}"
-    save_path = os.path.join("videos", file_name)
+    
+    timestamp = datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
+    file_name = f"{message.from_user.id}_{timestamp}{file_format}"
+    save_path = os.path.join("downloads", file_name)
 
     await bot.download_file(file_path, destination=save_path)
     logging.info("Скачан видео файл")
+       
+    audio_file_name = f"{message.from_user.id}_{timestamp}.wav"
+    output_path = os.path.join("downloads", audio_file_name)
+    extract_audio(f"downloads/{file_name}", output_path, output_format="wav")
+    os.remove(f"downloads/{file_name}")
 
-    if not os.path.exists("audios"):
-        os.makedirs('audios')
-        logging.info("Создана директрия для звуковых дорожек взятых из видео")
-        
-    audio_file_name = f"audios/audio_{message.from_user.id}_{file_id[:8]}.wav"
-    extract_audio(f"videos/{file_name}", audio_file_name, output_format="wav")
-
-    if not await has_audio(audio_file_name):
+    if not await has_audio(output_path):
         logging.error(f"Файл не содержит звука или битый")
         await message.answer('Файл тихий или битый, загрузите качественный аудио файл')
         os.remove(save_path)
-        os.remove(audio_file_name)
+        os.remove(output_path)
         return
-        
-    audio = WAVE(audio_file_name)
+
+    file_url = await add_file_to_storage(output_path, audio_file_name)
+    end_file_name = output_path
+
+    audio = WAVE(output_path)
     duration = audio.info.length
     logging.info(f"Получена длина аудио дорожки: {duration:.2f}")
     await print_price(int(duration), message)
 
+    # --- API: старт транскрибации ---
+    try:
+        start_resp = start_transcribe(file_name, file_url)
+        task_id = start_resp.get("id")
+        await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
+    except Exception as e:
+        await message.answer(f"Ошибка при запуске транскрибации: {e}")
+        return
+    # --- API: пример опроса статуса и получения результата ---
+    import asyncio
 
+    while True:
+        status = get_status(task_id)
+        await message.answer(f"Статус задачи: {status.get('status')}")
+        if status.get('status') == 'FINISHED':
+            result = get_result(task_id)
+            await message.answer(f"Результат: {result.get('result_url')}")
+            # --- СКАЧИВАНИЕ, КОНВЕРТАЦИЯ, КНОПКА ---
+            import requests
+            result_url = result.get('result_url')
+            if result_url:
+                local_json = f"downloads/{task_id}.json"
+                r = requests.get(result_url)
+                with open(local_json, 'wb') as f:
+                    f.write(r.content)
+                # Конвертация в docx
+                docx_path = export_dialog(local_json, file_format='docx')
+                # Загрузка docx в Supabase
+                docx_name = os.path.basename(docx_path)
+                docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+                # Кнопка для скачивания
+                keyboard = InlineKeyboardMarkup(
+                    inline_keyboard=[[InlineKeyboardButton(text="Скачать DOCX", url=docx_url)]]
+                )
+                await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
+            break
+        await asyncio.sleep(10)
 
 def get_video_format(file_path: str) -> Optional[str]:
     formats = [".webm", ".mp4", ".mov", ".avi", ".mkv"]
@@ -121,6 +163,8 @@ def get_video_format(file_path: str) -> Optional[str]:
     return None
 
 async def process_audio(message: Message, file_id: str, file_type: str):
+    global file_url
+    global end_file_name
     logging.basicConfig(level=logging.INFO)
     try:
         # ИНФОРМАЦИЯ О ФАЙЛЕ
@@ -128,10 +172,12 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         file = await bot.get_file(file_id)
         file_path = file.file_path    
 
+        timestamp = datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
         # ИМЯ ФАЙЛА
-        file_name = f"{file_type}_{message.from_user.id}_{file_id[:8]}.ogg"
+        audio_format = get_audio_format(file_path)
+        file_name = f"{message.from_user.id}_{timestamp}{audio_format}"
+        logging.info(f"{file_path}: {audio_format}")
         save_path = os.path.join("downloads", file_name)
-
 
         await bot.download_file(file_path, destination=save_path)
         logging.info(f"Файл сохранен: {save_path}")
@@ -143,28 +189,78 @@ async def process_audio(message: Message, file_id: str, file_type: str):
             os.remove(save_path)
             return
         
+        file_url = await add_file_to_storage(save_path, file_name)
+        end_file_name = file_name
         duration = message.voice.duration if file_type == "voice" else message.audio.duration
         await print_price(duration, message)
+
+        # --- API: старт транскрибации ---
+        try:
+            start_resp = start_transcribe(file_name, file_url)
+            task_id = start_resp.get("id")
+            await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
+        except Exception as e:
+            await message.answer(f"Ошибка при запуске транскрибации: {e}")
+            return
+        # --- API: пример опроса статуса и получения результата ---
+        import asyncio
+
+        while True:
+            status = get_status(task_id)
+            await message.answer(f"Статус задачи: {status.get('status')}")
+            if status.get('status') == 'FINISHED':
+                result = get_result(task_id)
+                await message.answer(f"Результат: {result.get('result_url')}")
+                # --- СКАЧИВАНИЕ, КОНВЕРТАЦИЯ, КНОПКА ---
+                import requests
+                result_url = result.get('result_url')
+                if result_url:
+                    local_json = f"downloads/{task_id}.json"
+                    r = requests.get(result_url)
+                    with open(local_json, 'wb') as f:
+                        f.write(r.content)
+                    # Конвертация в docx
+                    docx_path = export_dialog(local_json, file_format='docx')
+                    # Загрузка docx в Supabase
+                    docx_name = os.path.basename(docx_path)
+                    docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+                    # Кнопка для скачивания
+                    keyboard = InlineKeyboardMarkup(
+                        inline_keyboard=[[InlineKeyboardButton(text="Скачать DOCX", url=docx_url)]]
+                    )
+                    await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
+                break
+            await asyncio.sleep(10)
+
     except Exception as e:
         logging.error(f"Error: {str(e)}")
 
+def get_audio_format(file_path: str) -> Optional[str]:
+    formats = [".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".oga"]
+    for fmt in formats:
+        if file_path.endswith(fmt):
+            return fmt
+    return None
+
 async def print_price(duration: int, message: Message):
     cost = calculate_cost(duration)  # СТОИМОСТЬ
-    prices = [LabeledPrice(label="XTR", amount=cost)] 
+    prices = [LabeledPrice(label="XTR", amount=int(cost))] 
     await message.answer(
         f"✅ Файл получен!\n"
         f"Длительность: {duration // 60}:{duration % 60:02d} мин.\n"
         f"Стоимость: {cost} XTR")
 
-    await message.answer_invoice(
-        title="Оплата транскрибации",
-        description=f"Сумма: {cost} XTR",
-        prices=prices,
-        provider_token="",
-        payload="trancrib_payment",
-        currency="XTR",
-        reply_markup=kb.payment_keyboard(cost), 
-    )
+    # --- ЗАГЛУШКА ОПЛАТЫ ---
+    # await message.answer_invoice(
+    #     title="Оплата транскрибации",
+    #     description=f"Сумма: {cost} XTR",
+    #     prices=prices,
+    #     provider_token="",
+    #     payload="trancrib_payment",
+    #     currency="XTR",
+    #     reply_markup=kb.payment_keyboard(int(cost)), 
+    # )
+    await message.answer("Оплата прошла успешно! Продолжаем обработку...")
 
 async def has_audio(audio_path: str, silence_thresh=-50.0, min_silence_len=1000) -> bool:
     audio = AudioSegment.from_file(audio_path)
