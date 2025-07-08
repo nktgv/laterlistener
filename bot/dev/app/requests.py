@@ -32,3 +32,8 @@ def get_result(task_id: str):
     response = requests.get(f"{BASE_URL}/result/{task_id}", timeout=60)
     response.raise_for_status()
     return response.json() 
+
+def get_token():
+    response = requests.get(f"{BASE_URL}/token", timeout=30)
+    response.raise_for_status()
+    return response.json()
