@@ -40,12 +40,6 @@ async def cmd_help(message: Message):
 async def cmd_audio(message: Message):
     await message.answer('Пожалуйста, отправьте ваш файл')
 
-@router.message(F.text == 'Перейти в веб-приложение')
-async def cmd_to_web_app(message: Message):
-    reply_button = kb.InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='Перейти в веб-приложение')]
-    ], resize_keyboard = True)
-    await message.answer("Нажми на кнопку, чтобы перейти в веб-приложение", reply_markup=reply_button)
 
 # ОБРАБОТЧИК ГС
 @router.message(F.voice)
@@ -296,5 +290,3 @@ def calculate_cost(duration_sec: int) -> float:
     minutes = max(1, (duration_sec + 59) // 60)  # Округление вверх
     return minutes * cost_per_minute
 #ТРАНСКРИБАЦИЯ
-
-
