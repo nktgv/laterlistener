@@ -1,7 +1,7 @@
 from typing import Optional
 from aiogram import F, Router
 from mutagen.wave import WAVE
-from aiogram.types import Message, LabeledPrice, PreCheckoutQuery
+from aiogram.types import Message, LabeledPrice, PreCheckoutQuery, InlineKeyboardMarkup, InlineKeyboardButton
 import os
 from aiogram.filters import CommandStart, Command
 from pydub import AudioSegment
@@ -10,7 +10,10 @@ import logging
 import app.keyboards as kb
 from audio_extract import extract_audio
 from datetime import datetime
-from app.db_storage import add_file_to_storage
+from app.db_storage import add_file_to_storage, upload_file_to_storage
+from app.requests import start_transcribe, get_status, get_result
+import time
+from app.utils.convert import export_dialog
 
 router = Router()
 
@@ -65,7 +68,7 @@ async def handle_video(message: Message):
 
 # ОБРАБОТЧИК КРУЖОЧКОВ В ТГ
 @router.message(F.content_type == "video_note")
-async def handle_video(message: Message):
+async def handle_video_note(message: Message):
     file_id = message.video_note.file_id
     await process_video(message, file_id)
 
@@ -114,6 +117,43 @@ async def process_video(message: Message, file_id: str):
     logging.info(f"Получена длина аудио дорожки: {duration:.2f}")
     await print_price(int(duration), message)
 
+    # --- API: старт транскрибации ---
+    try:
+        start_resp = start_transcribe(file_name, file_url)
+        task_id = start_resp.get("id")
+        await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
+    except Exception as e:
+        await message.answer(f"Ошибка при запуске транскрибации: {e}")
+        return
+    # --- API: пример опроса статуса и получения результата ---
+    import asyncio
+
+    while True:
+        status = get_status(task_id)
+        await message.answer(f"Статус задачи: {status.get('status')}")
+        if status.get('status') == 'FINISHED':
+            result = get_result(task_id)
+            await message.answer(f"Результат: {result.get('result_url')}")
+            # --- СКАЧИВАНИЕ, КОНВЕРТАЦИЯ, КНОПКА ---
+            import requests
+            result_url = result.get('result_url')
+            if result_url:
+                local_json = f"downloads/{task_id}.json"
+                r = requests.get(result_url)
+                with open(local_json, 'wb') as f:
+                    f.write(r.content)
+                # Конвертация в docx
+                docx_path = export_dialog(local_json, file_format='docx')
+                # Загрузка docx в Supabase
+                docx_name = os.path.basename(docx_path)
+                docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+                # Кнопка для скачивания
+                keyboard = InlineKeyboardMarkup(
+                    inline_keyboard=[[InlineKeyboardButton(text="Скачать DOCX", url=docx_url)]]
+                )
+                await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
+            break
+        await asyncio.sleep(10)
 
 def get_video_format(file_path: str) -> Optional[str]:
     formats = [".webm", ".mp4", ".mov", ".avi", ".mkv"]
@@ -139,7 +179,6 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         logging.info(f"{file_path}: {audio_format}")
         save_path = os.path.join("downloads", file_name)
 
-
         await bot.download_file(file_path, destination=save_path)
         logging.info(f"Файл сохранен: {save_path}")
 
@@ -154,6 +193,45 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         end_file_name = file_name
         duration = message.voice.duration if file_type == "voice" else message.audio.duration
         await print_price(duration, message)
+
+        # --- API: старт транскрибации ---
+        try:
+            start_resp = start_transcribe(file_name, file_url)
+            task_id = start_resp.get("id")
+            await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
+        except Exception as e:
+            await message.answer(f"Ошибка при запуске транскрибации: {e}")
+            return
+        # --- API: пример опроса статуса и получения результата ---
+        import asyncio
+
+        while True:
+            status = get_status(task_id)
+            await message.answer(f"Статус задачи: {status.get('status')}")
+            if status.get('status') == 'FINISHED':
+                result = get_result(task_id)
+                await message.answer(f"Результат: {result.get('result_url')}")
+                # --- СКАЧИВАНИЕ, КОНВЕРТАЦИЯ, КНОПКА ---
+                import requests
+                result_url = result.get('result_url')
+                if result_url:
+                    local_json = f"downloads/{task_id}.json"
+                    r = requests.get(result_url)
+                    with open(local_json, 'wb') as f:
+                        f.write(r.content)
+                    # Конвертация в docx
+                    docx_path = export_dialog(local_json, file_format='docx')
+                    # Загрузка docx в Supabase
+                    docx_name = os.path.basename(docx_path)
+                    docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+                    # Кнопка для скачивания
+                    keyboard = InlineKeyboardMarkup(
+                        inline_keyboard=[[InlineKeyboardButton(text="Скачать DOCX", url=docx_url)]]
+                    )
+                    await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
+                break
+            await asyncio.sleep(10)
+
     except Exception as e:
         logging.error(f"Error: {str(e)}")
 
@@ -166,21 +244,23 @@ def get_audio_format(file_path: str) -> Optional[str]:
 
 async def print_price(duration: int, message: Message):
     cost = calculate_cost(duration)  # СТОИМОСТЬ
-    prices = [LabeledPrice(label="XTR", amount=cost)] 
+    prices = [LabeledPrice(label="XTR", amount=int(cost))] 
     await message.answer(
         f"✅ Файл получен!\n"
         f"Длительность: {duration // 60}:{duration % 60:02d} мин.\n"
         f"Стоимость: {cost} XTR")
 
-    await message.answer_invoice(
-        title="Оплата транскрибации",
-        description=f"Сумма: {cost} XTR",
-        prices=prices,
-        provider_token="",
-        payload="trancrib_payment",
-        currency="XTR",
-        reply_markup=kb.payment_keyboard(cost), 
-    )
+    # --- ЗАГЛУШКА ОПЛАТЫ ---
+    # await message.answer_invoice(
+    #     title="Оплата транскрибации",
+    #     description=f"Сумма: {cost} XTR",
+    #     prices=prices,
+    #     provider_token="",
+    #     payload="trancrib_payment",
+    #     currency="XTR",
+    #     reply_markup=kb.payment_keyboard(int(cost)), 
+    # )
+    await message.answer("Оплата прошла успешно! Продолжаем обработку...")
 
 async def has_audio(audio_path: str, silence_thresh=-50.0, min_silence_len=1000) -> bool:
     audio = AudioSegment.from_file(audio_path)

@@ -1,28 +1,34 @@
-from fastapi import FastAPI, HTTPException
-from schema import *
-from app.handlers import file_url, end_file_name
-from dotenv import load_dotenv
+from app.schema import *
 import os
 import requests
-
-app = FastAPI()
+from dotenv import load_dotenv
 
 load_dotenv()
-local_host = os.environ.get("BACKEND_URL")
+BASE_URL = os.environ.get("BACKEND_URL")
 
-@app.post('/transcribe')
-def start_transcribe(task: TaskTranscribe):
-    task.file_name = end_file_name
-    task.file_url = file_url
-    payload = {
-        "file_name": task.file_name,
-        "file_url": task.file_url
-    }
-    try:
-        response = requests.post(local_host, json=payload, timeout=50)
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail=f"Worker error: {response.text}")
-        
-        return response.status_code
-    except requests.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка подключения: {e}") 
+def start_transcribe(file_name: str, file_url: str):
+    """
+    Отправить задачу на транскрибацию (POST /transcribe)
+    """
+    payload = {"file_name": file_name, "file_url": file_url}
+    response = requests.post(f"{BASE_URL}/transcribe", json=payload, timeout=50)
+    response.raise_for_status()
+    return response.json()
+
+
+def get_status(task_id: str):
+    """
+    Получить статус задачи (GET /status/{task_id})
+    """
+    response = requests.get(f"{BASE_URL}/status/{task_id}", timeout=20)
+    response.raise_for_status()
+    return response.json()
+
+
+def get_result(task_id: str):
+    """
+    Получить результат транскрибации (GET /result/{task_id})
+    """
+    response = requests.get(f"{BASE_URL}/result/{task_id}", timeout=60)
+    response.raise_for_status()
+    return response.json() 
