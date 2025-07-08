@@ -236,8 +236,9 @@ async def process_audio(message: Message, file_id: str, file_type: str):
                     await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
                 break
             await asyncio.sleep(10)
+        response = get_token()
         reply_button = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url="")]]
+            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"?token={response.get('token')}")]]
         )
         await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
     except Exception as e:
