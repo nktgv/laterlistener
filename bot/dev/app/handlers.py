@@ -154,6 +154,10 @@ async def process_video(message: Message, file_id: str):
                 await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
             break
         await asyncio.sleep(10)
+    reply_button = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url="")]]
+        )
+    await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
 
 def get_video_format(file_path: str) -> Optional[str]:
     formats = [".webm", ".mp4", ".mov", ".avi", ".mkv"]
