@@ -40,6 +40,12 @@ async def cmd_help(message: Message):
 async def cmd_audio(message: Message):
     await message.answer('Пожалуйста, отправьте ваш файл')
 
+@router.message(F.text == 'Перейти в веб-приложение')
+async def cmd_to_web_app(message: Message):
+    reply_button = kb.InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='Перейти в веб-приложение')]
+    ], resize_keyboard = True)
+    await message.answer("Нажми на кнопку, чтобы перейти в веб-приложение", reply_markup=reply_button)
 
 # ОБРАБОТЧИК ГС
 @router.message(F.voice)
@@ -60,7 +66,7 @@ async def handle_video(message: Message):
     file_id = message.video.file_id
     file_size = message.video.file_size
     logging.info(f"Размер файла: {file_size}")
-    max_size = 20 * 1024 * 1024
+    max_size = 200 * 1024 * 1024
     if file_size < max_size:
         await process_video(message, file_id)
     else:
@@ -231,7 +237,10 @@ async def process_audio(message: Message, file_id: str, file_type: str):
                     await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
                 break
             await asyncio.sleep(10)
-
+        reply_button = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url="")]]
+        )
+        await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
     except Exception as e:
         logging.error(f"Error: {str(e)}")
 
@@ -287,3 +296,5 @@ def calculate_cost(duration_sec: int) -> float:
     minutes = max(1, (duration_sec + 59) // 60)  # Округление вверх
     return minutes * cost_per_minute
 #ТРАНСКРИБАЦИЯ
+
+
