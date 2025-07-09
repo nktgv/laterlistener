@@ -15,9 +15,8 @@ from app.requests import start_transcribe, get_status, get_result, get_token
 from app.utils.convert import export_dialog
 import asyncio
 import aiofiles.os
-router = Router()
 
-lock = asyncio.Lock()
+router = Router()
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -94,81 +93,84 @@ async def handle_another_files(message: Message):
 
 async def process_video(message: Message, file_id: str):
     logging.basicConfig(level=logging.INFO)
-    bot = message.bot
-    file = await bot.get_file(file_id)
-    file_path = file.file_path
-
-    file_format = get_video_format(file_path.lower())
-    if not file_format:
-        logging.error(f"Данный формат видео не поддерживается: {file_path}")
-        message.reply("Данный формат файла не поддерживается. Отправьте другой файл")
-    
-    timestamp = datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
-    file_name = f"{message.from_user.id}_{timestamp}{file_format}"
-    save_path = os.path.join("downloads", file_name)
-
-    await bot.download_file(file_path, destination=save_path)
-    logging.info("Скачан видео файл")
-       
-    audio_file_name = f"{message.from_user.id}_{timestamp}.wav"
-    output_path = os.path.join("downloads", audio_file_name)
-    await asyncio.to_thread(extract_audio, f"downloads/{file_name}", output_path, output_format="wav")
-    await aiofiles.os.remove(f"downloads/{file_name}")
-
-    if not await has_audio(output_path):
-        logging.error(f"Файл не содержит звука или битый")
-        await message.answer('Файл тихий или битый, загрузите качественный аудио файл')
-        await aiofiles.os.remove(save_path)
-        await aiofiles.os.remove(output_path)
-        return
-    
-    file_url = await add_file_to_storage(output_path, audio_file_name)
-
-    audio = WAVE(output_path)
-    duration = audio.info.length
-    logging.info(f"Получена длина аудио дорожки: {duration:.2f}")
-    await print_price(int(duration), message)
-
-    # --- API: старт транскрибации ---
     try:
-        start_resp = start_transcribe(output_path, file_url)
-        task_id = start_resp.get("id")
-        await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
+        bot = message.bot
+        file = await bot.get_file(file_id)
+        file_path = file.file_path
+
+        file_format = get_video_format(file_path.lower())
+        if not file_format:
+            logging.error(f"Данный формат видео не поддерживается: {file_path}")
+            message.reply("Данный формат файла не поддерживается. Отправьте другой файл")
+        
+        timestamp = datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
+        file_name = f"{message.from_user.id}_{timestamp}{file_format}"
+        save_path = os.path.join("downloads", file_name)
+
+        await bot.download_file(file_path, destination=save_path)
+        logging.info("Скачан видео файл")
+        
+        audio_file_name = f"{message.from_user.id}_{timestamp}.wav"
+        output_path = os.path.join("downloads", audio_file_name)
+        await asyncio.to_thread(extract_audio, f"downloads/{file_name}", output_path, output_format="wav")
+        await aiofiles.os.remove(f"downloads/{file_name}")
+
+        if not await has_audio(output_path):
+            logging.error(f"Файл не содержит звука или битый")
+            await message.answer('Файл тихий или битый, загрузите качественный аудио файл')
+            await aiofiles.os.remove(save_path)
+            await aiofiles.os.remove(output_path)
+            return
+        
+        file_url = await add_file_to_storage(output_path, audio_file_name)
+
+        audio = WAVE(output_path)
+        duration = audio.info.length
+        logging.info(f"Получена длина аудио дорожки: {duration:.2f}")
+        await print_price(int(duration), message)
+
+        # --- API: старт транскрибации ---
+        try:
+            start_resp = start_transcribe(output_path, file_url)
+            task_id = start_resp.get("id")
+            await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
+        except Exception as e:
+            await message.answer(f"Ошибка при запуске транскрибации: {e}")
+            return
+        # --- API: пример опроса статуса и получения результата ---
+        while True:
+            status = get_status(task_id)
+            await message.answer(f"Статус задачи: {status.get('status')}")
+            if status.get('status') == 'FINISHED':
+                result = get_result(task_id)
+                await message.answer(f"Результат: {result.get('result_url')}")
+                # --- СКАЧИВАНИЕ, КОНВЕРТАЦИЯ, КНОПКА ---
+                import requests
+                result_url = result.get('result_url')
+                if result_url:
+                    local_json = f"downloads/{task_id}.json"
+                    r = requests.get(result_url)
+                    with open(local_json, 'wb') as f:
+                        f.write(r.content)
+                    # Конвертация в docx
+                    docx_path = await asyncio.to_thread(export_dialog, local_json, file_format='docx')
+                    # Загрузка docx в Supabase
+                    docx_name = os.path.basename(docx_path)
+                    docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+                    # Кнопка для скачивания
+                    keyboard = InlineKeyboardMarkup(
+                        inline_keyboard=[[InlineKeyboardButton(text="Скачать DOCX", url=docx_url)]]
+                    )
+                    await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
+                break
+            await asyncio.sleep(10)
+        response = get_token()
+        reply_button = InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"?token={response.get('token')}")]]
+            )
+        await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
     except Exception as e:
-        await message.answer(f"Ошибка при запуске транскрибации: {e}")
-        return
-    # --- API: пример опроса статуса и получения результата ---
-    while True:
-        status = get_status(task_id)
-        await message.answer(f"Статус задачи: {status.get('status')}")
-        if status.get('status') == 'FINISHED':
-            result = get_result(task_id)
-            await message.answer(f"Результат: {result.get('result_url')}")
-            # --- СКАЧИВАНИЕ, КОНВЕРТАЦИЯ, КНОПКА ---
-            import requests
-            result_url = result.get('result_url')
-            if result_url:
-                local_json = f"downloads/{task_id}.json"
-                r = requests.get(result_url)
-                with open(local_json, 'wb') as f:
-                    f.write(r.content)
-                # Конвертация в docx
-                docx_path = await asyncio.to_thread(export_dialog, local_json, file_format='docx')
-                # Загрузка docx в Supabase
-                docx_name = os.path.basename(docx_path)
-                docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-                # Кнопка для скачивания
-                keyboard = InlineKeyboardMarkup(
-                    inline_keyboard=[[InlineKeyboardButton(text="Скачать DOCX", url=docx_url)]]
-                )
-                await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
-            break
-        await asyncio.sleep(10)
-    response = get_token()
-    reply_button = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"?token={response.get('token')}")]]
-        )
-    await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
+        logging.error(f"Ошибка обработки видео: {str(e)}")
 
 def get_video_format(file_path: str) -> Optional[str]:
     formats = [".webm", ".mp4", ".mov", ".avi", ".mkv"]
