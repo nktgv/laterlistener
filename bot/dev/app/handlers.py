@@ -12,13 +12,12 @@ from audio_extract import extract_audio
 from datetime import datetime
 from app.db_storage import add_file_to_storage, upload_file_to_storage
 from app.requests import start_transcribe, get_status, get_result, get_token
-import time
 from app.utils.convert import export_dialog
-
+import asyncio
+import aiofiles.os
 router = Router()
 
-file_url = ""
-end_file_name = ""
+lock = asyncio.Lock()
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -45,13 +44,21 @@ async def cmd_audio(message: Message):
 @router.message(F.voice)
 async def handle_voice(message: Message):
     file_id = message.voice.file_id
-    await process_audio(message, file_id, "voice")
+    try:
+        await process_audio(message, file_id, "voice")
+    except Exception as e:
+        logging.error(f"Ошибка обработки гс: {str(e)}")
+        return
 
 # ОБРАБОТЧИК АУДИО
 @router.message(F.audio)
 async def handle_audio(message: Message):
     file_id = message.audio.file_id
-    await process_audio(message, file_id, "audio")
+    try:
+        await process_audio(message, file_id, "audio")
+    except Exception as e:
+        logging.error(f"Ошибка обработки аудио файла: {str(e)}")
+        return
 
 # ОБРАБОТЧИК ВИДЕО
 @router.message(F.content_type == "video")
@@ -62,7 +69,11 @@ async def handle_video(message: Message):
     logging.info(f"Размер файла: {file_size}")
     max_size = 200 * 1024 * 1024
     if file_size < max_size:
-        await process_video(message, file_id)
+        try:
+            await process_video(message, file_id)
+        except Exception as e:
+            logging.error(f"Ошибка обработки видео: {str(e)}")
+            return
     else:
         await message.reply("Файл слишком большой, максимальный размер 20МБ, отправьте другой файл")
 
@@ -70,7 +81,11 @@ async def handle_video(message: Message):
 @router.message(F.content_type == "video_note")
 async def handle_video_note(message: Message):
     file_id = message.video_note.file_id
-    await process_video(message, file_id)
+    try:
+        await process_video(message, file_id)
+    except Exception as e:
+        logging.error(f"Ошибка обработки кружочка в тг: {str(e)}")
+        return
 
 # ОБРАБОТЧИК ФАЙЛОВ НЕ ЯВЛЯЮЩИХСЯ АУДИО ИЛИ ГС 
 @router.message(F.photo | F.document)
@@ -78,14 +93,12 @@ async def handle_another_files(message: Message):
     await message.answer("Файл не является аудио или голосовым сообщением")
 
 async def process_video(message: Message, file_id: str):
-    global file_url
-    global end_file_name
     logging.basicConfig(level=logging.INFO)
     bot = message.bot
     file = await bot.get_file(file_id)
     file_path = file.file_path
 
-    file_format = get_video_format(file_path)
+    file_format = get_video_format(file_path.lower())
     if not file_format:
         logging.error(f"Данный формат видео не поддерживается: {file_path}")
         message.reply("Данный формат файла не поддерживается. Отправьте другой файл")
@@ -99,18 +112,17 @@ async def process_video(message: Message, file_id: str):
        
     audio_file_name = f"{message.from_user.id}_{timestamp}.wav"
     output_path = os.path.join("downloads", audio_file_name)
-    extract_audio(f"downloads/{file_name}", output_path, output_format="wav")
-    os.remove(f"downloads/{file_name}")
+    await asyncio.to_thread(extract_audio, f"downloads/{file_name}", output_path, output_format="wav")
+    await aiofiles.os.remove(f"downloads/{file_name}")
 
     if not await has_audio(output_path):
         logging.error(f"Файл не содержит звука или битый")
         await message.answer('Файл тихий или битый, загрузите качественный аудио файл')
-        os.remove(save_path)
-        os.remove(output_path)
+        await aiofiles.os.remove(save_path)
+        await aiofiles.os.remove(output_path)
         return
-
+    
     file_url = await add_file_to_storage(output_path, audio_file_name)
-    end_file_name = output_path
 
     audio = WAVE(output_path)
     duration = audio.info.length
@@ -119,15 +131,13 @@ async def process_video(message: Message, file_id: str):
 
     # --- API: старт транскрибации ---
     try:
-        start_resp = start_transcribe(file_name, file_url)
+        start_resp = start_transcribe(output_path, file_url)
         task_id = start_resp.get("id")
         await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
     except Exception as e:
         await message.answer(f"Ошибка при запуске транскрибации: {e}")
         return
     # --- API: пример опроса статуса и получения результата ---
-    import asyncio
-
     while True:
         status = get_status(task_id)
         await message.answer(f"Статус задачи: {status.get('status')}")
@@ -143,7 +153,7 @@ async def process_video(message: Message, file_id: str):
                 with open(local_json, 'wb') as f:
                     f.write(r.content)
                 # Конвертация в docx
-                docx_path = export_dialog(local_json, file_format='docx')
+                docx_path = await asyncio.to_thread(export_dialog, local_json, file_format='docx')
                 # Загрузка docx в Supabase
                 docx_name = os.path.basename(docx_path)
                 docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
@@ -168,8 +178,6 @@ def get_video_format(file_path: str) -> Optional[str]:
     return None
 
 async def process_audio(message: Message, file_id: str, file_type: str):
-    global file_url
-    global end_file_name
     logging.basicConfig(level=logging.INFO)
     try:
         # ИНФОРМАЦИЯ О ФАЙЛЕ
@@ -179,7 +187,7 @@ async def process_audio(message: Message, file_id: str, file_type: str):
 
         timestamp = datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
         # ИМЯ ФАЙЛА
-        audio_format = get_audio_format(file_path)
+        audio_format = get_audio_format(file_path.lower())
         file_name = f"{message.from_user.id}_{timestamp}{audio_format}"
         logging.info(f"{file_path}: {audio_format}")
         save_path = os.path.join("downloads", file_name)
@@ -191,11 +199,11 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         if not await has_audio(save_path):
             logging.error(f"Файл не содержит звука или битый")
             await message.answer('Файл тихий или битый, загрузите качественный аудио файл')
-            os.remove(save_path)
+            aiofiles.os.remove(save_path)
             return
         
         file_url = await add_file_to_storage(save_path, file_name)
-        end_file_name = file_name
+
         duration = message.voice.duration if file_type == "voice" else message.audio.duration
         await print_price(duration, message)
 
@@ -208,8 +216,6 @@ async def process_audio(message: Message, file_id: str, file_type: str):
             await message.answer(f"Ошибка при запуске транскрибации: {e}")
             return
         # --- API: пример опроса статуса и получения результата ---
-        import asyncio
-
         while True:
             status = get_status(task_id)
             await message.answer(f"Статус задачи: {status.get('status')}")
@@ -225,7 +231,7 @@ async def process_audio(message: Message, file_id: str, file_type: str):
                     with open(local_json, 'wb') as f:
                         f.write(r.content)
                     # Конвертация в docx
-                    docx_path = export_dialog(local_json, file_format='docx')
+                    docx_path = await asyncio.to_thread(export_dialog, local_json, file_format='docx')
                     # Загрузка docx в Supabase
                     docx_name = os.path.basename(docx_path)
                     docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
