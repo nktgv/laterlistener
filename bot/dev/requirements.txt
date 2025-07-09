@@ -3,3 +3,4 @@ python-dotenv
 audio-extract
 fastapi
 supabase
+aiofiles
