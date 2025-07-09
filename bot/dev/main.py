@@ -3,6 +3,7 @@ from aiogram.client.telegram import TelegramAPIServer
 from aiogram.client.session.aiohttp import AiohttpSession
 import asyncio
 import os
+import aiofiles.os
 from dotenv import load_dotenv
 
 from app.handlers import router
@@ -18,7 +19,7 @@ async def main():
     dp = Dispatcher()
     dp.include_router(router)
     if not os.path.exists("downloads"):
-        os.makedirs("downloads")
+        await aiofiles.os.makedirs("downloads")
     await dp.start_polling(bot)
 
 
