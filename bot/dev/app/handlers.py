@@ -113,7 +113,7 @@ async def process_video(message: Message, file_id: str):
         logging.error(f"Данный формат видео не поддерживается: {file_path}")
         message.reply("Данный формат файла не поддерживается. Отправьте другой файл")
     
-    timestamp = datetime.now().strftime("%Y.%m.%d_%H-%M-%S")
+    timestamp = datetime.now().strftime("%Y.%m.%d_%H-%M-%S")# на windows формат "%Y.%m.%d_%H:%M:%S" не работал
     file_name = f"{message.from_user.id}_{timestamp}{file_format}"
     save_path = os.path.join("downloads", file_name)
 
@@ -216,7 +216,7 @@ async def process_video(message: Message, file_id: str):
                 docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
                 pdf_url = await upload_file_to_storage(pdf_path, pdf_name, content_type='application/pdf')
 
-                # Панель с выбором формата
+                # ПАНЕЛЬ ВЫБОРА ФОРМАТА
                 keyboard = InlineKeyboardMarkup(
                     inline_keyboard=[
                         [InlineKeyboardButton(text="Скачать DOCX", url=docx_url)],
@@ -248,7 +248,7 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         file = await bot.get_file(file_id)
         file_path = file.file_path    
 
-        timestamp = datetime.now().strftime("%Y.%m.%d_%H-%M-%S")
+        timestamp = datetime.now().strftime("%Y.%m.%d_%H-%M-%S")# на windows формат "%Y.%m.%d_%H:%M:%S" не работал
         # ИМЯ ФАЙЛА
         audio_format = get_audio_format(file_path.lower())
         file_name = f"{message.from_user.id}_{timestamp}{audio_format}"
