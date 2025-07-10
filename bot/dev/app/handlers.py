@@ -11,7 +11,7 @@ import app.keyboards as kb
 from audio_extract import extract_audio
 from datetime import datetime
 from app.db_storage import add_file_to_storage, upload_file_to_storage
-from app.requests import start_transcribe, get_status, get_result, get_token
+from app.requests import start_transcribe, get_status, get_result, get_onetime_token
 from app.utils.convert import export_dialog
 import asyncio
 import aiofiles.os
@@ -164,7 +164,7 @@ async def process_video(message: Message, file_id: str):
                     await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
                 break
             await asyncio.sleep(10)
-        response = get_token()
+        response = get_onetime_token()
         reply_button = InlineKeyboardMarkup(
                 inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"?token={response.get('token')}")]]
             )
@@ -244,7 +244,7 @@ async def process_audio(message: Message, file_id: str, file_type: str):
                     await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
                 break
             await asyncio.sleep(10)
-        response = get_token()
+        response = get_onetime_token()
         reply_button = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"?token={response.get('token')}")]]
         )
