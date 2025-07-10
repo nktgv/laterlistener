@@ -5,8 +5,7 @@ import json
 from datetime import datetime
 from typing import Literal, Optional, Dict
 import os
-from doc2pdf import convert
-
+from docx2pdf import convert
 
 def export_dialog(
     input_json: str,
@@ -23,7 +22,34 @@ def export_dialog(
     space = Pt(0)
 
     with open(input_json, 'r', encoding='utf-8') as f:
-        dialog = json.load(f)
+        segments = json.load(f)  # Изменили название переменной для ясности
+
+    # Группируем слова по speaker и временным отрезкам
+    dialog = []
+    current_speaker = None
+    current_text = []
+    
+    for segment in segments:
+        if 'speaker' not in segment or 'word' not in segment:
+            continue  # Пропускаем некорректные сегменты
+            
+        if segment['speaker'] != current_speaker:
+            if current_speaker is not None:
+                dialog.append({
+                    'speaker': current_speaker,
+                    'text': ' '.join(current_text)
+                })
+            current_speaker = segment['speaker']
+            current_text = []
+        
+        current_text.append(segment['word'])
+    
+    # Добавляем последнюю реплику
+    if current_speaker and current_text:
+        dialog.append({
+            'speaker': current_speaker,
+            'text': ' '.join(current_text)
+        })
 
     doc = Document()
     
