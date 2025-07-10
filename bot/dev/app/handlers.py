@@ -15,6 +15,8 @@ from app.requests import start_transcribe, get_status, get_result, get_onetime_t
 from app.utils.convert import export_dialog
 import asyncio
 import aiofiles.os
+import requests
+import json 
 
 router = Router()
 
@@ -106,6 +108,14 @@ async def process_video(message: Message, file_id: str):
         timestamp = datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
         file_name = f"{message.from_user.id}_{timestamp}{file_format}"
         save_path = os.path.join("downloads", file_name)
+    file_format = get_video_format(file_path)
+    if not file_format:
+        logging.error(f"Данный формат видео не поддерживается: {file_path}")
+        message.reply("Данный формат файла не поддерживается. Отправьте другой файл")
+    
+    timestamp = datetime.now().strftime("%Y.%m.%d_%H-%M-%S")# на windows формат "%Y.%m.%d_%H:%M:%S" не работал
+    file_name = f"{message.from_user.id}_{timestamp}{file_format}"
+    save_path = os.path.join("downloads", file_name)
 
         await bot.download_file(file_path, destination=save_path)
         logging.info("Скачан видео файл")
@@ -171,6 +181,57 @@ async def process_video(message: Message, file_id: str):
         await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
     except Exception as e:
         logging.error(f"Ошибка обработки видео: {str(e)}")
+    # --- API: старт транскрибации ---
+    try:
+        start_resp = start_transcribe(file_name, file_url)
+        task_id = start_resp.get("id")
+        await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
+    except Exception as e:
+        await message.answer(f"Ошибка при запуске транскрибации: {e}")
+        return
+    # --- API: пример опроса статуса и получения результата ---
+    import asyncio
+
+    while True:
+        status = get_status(task_id)
+        await message.answer(f"Статус задачи: {status.get('status')}")
+        if status.get('status') == 'FINISHED':
+            result = get_result(task_id)
+            # Скачивание JSON результата
+            result_url = result.get('result_url')
+            if result_url:
+                local_json = f"downloads/{task_id}.json"
+                r = requests.get(result_url)
+                with open(local_json, 'wb') as f:
+                    f.write(r.content)
+
+                # Конвертация в DOCX и PDF
+                docx_path = export_dialog(local_json, file_format='docx')
+                pdf_path = export_dialog(local_json, file_format='pdf')
+
+                # Загрузка в Supabase
+                docx_name = os.path.basename(docx_path)
+                pdf_name = os.path.basename(pdf_path)
+
+                docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+                pdf_url = await upload_file_to_storage(pdf_path, pdf_name, content_type='application/pdf')
+
+                # ПАНЕЛЬ ВЫБОРА ФОРМАТА
+                keyboard = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="Скачать DOCX", url=docx_url)],
+                        [InlineKeyboardButton(text="Скачать PDF", url=pdf_url)],
+                        [InlineKeyboardButton(text="📩 Отправить в ЛС", callback_data=f"send_to_pm_{task_id}")]
+                    ]
+                )
+                await message.answer("Выберите формат для скачивания результата:", reply_markup=keyboard)
+            break
+        await asyncio.sleep(10)
+    response = get_token()
+    reply_button = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"?token={response.get('token')}")]]
+        )
+    await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
 
 def get_video_format(file_path: str) -> Optional[str]:
     formats = [".webm", ".mp4", ".mov", ".avi", ".mkv"]
@@ -187,7 +248,7 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         file = await bot.get_file(file_id)
         file_path = file.file_path    
 
-        timestamp = datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
+        timestamp = datetime.now().strftime("%Y.%m.%d_%H-%M-%S")# на windows формат "%Y.%m.%d_%H:%M:%S" не работал
         # ИМЯ ФАЙЛА
         audio_format = get_audio_format(file_path.lower())
         file_name = f"{message.from_user.id}_{timestamp}{audio_format}"
@@ -223,9 +284,7 @@ async def process_audio(message: Message, file_id: str, file_type: str):
             await message.answer(f"Статус задачи: {status.get('status')}")
             if status.get('status') == 'FINISHED':
                 result = get_result(task_id)
-                await message.answer(f"Результат: {result.get('result_url')}")
-                # --- СКАЧИВАНИЕ, КОНВЕРТАЦИЯ, КНОПКА ---
-                import requests
+                # Скачивание JSON результата
                 result_url = result.get('result_url')
                 if result_url:
                     local_json = f"downloads/{task_id}.json"
@@ -235,13 +294,27 @@ async def process_audio(message: Message, file_id: str, file_type: str):
                     # Конвертация в docx
                     docx_path = await asyncio.to_thread(export_dialog, local_json, file_format='docx')
                     # Загрузка docx в Supabase
+
+                    # Конвертация в DOCX и PDF
+                    docx_path = export_dialog(local_json, file_format='docx')
+                    pdf_path = export_dialog(local_json, file_format='pdf')
+
+                    # Загрузка в Supabase
                     docx_name = os.path.basename(docx_path)
+                    pdf_name = os.path.basename(pdf_path)
+
                     docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-                    # Кнопка для скачивания
+                    pdf_url = await upload_file_to_storage(pdf_path, pdf_name, content_type='application/pdf')
+
+                    # ПАНЕЛЬ ВЫБОРА ФОРМАТА
                     keyboard = InlineKeyboardMarkup(
-                        inline_keyboard=[[InlineKeyboardButton(text="Скачать DOCX", url=docx_url)]]
+                        inline_keyboard=[
+                            [InlineKeyboardButton(text="Скачать DOCX", url=docx_url)],
+                            [InlineKeyboardButton(text="Скачать PDF", url=pdf_url)],
+                            [InlineKeyboardButton(text="📩 Отправить в ЛС", callback_data=f"send_to_pm_{task_id}")]
+                        ]
                     )
-                    await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
+                    await message.answer("Выберите формат для скачивания результата:", reply_markup=keyboard)
                 break
             await asyncio.sleep(10)
         response = get_onetime_token()
@@ -251,13 +324,14 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
     except Exception as e:
         logging.error(f"Error: {str(e)}")
-
+                      
 def get_audio_format(file_path: str) -> Optional[str]:
     formats = [".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".oga"]
     for fmt in formats:
         if file_path.endswith(fmt):
             return fmt
     return None
+
 
 async def print_price(duration: int, message: Message):
     cost = calculate_cost(duration)  # СТОИМОСТЬ
@@ -304,3 +378,47 @@ def calculate_cost(duration_sec: int) -> float:
     minutes = max(1, (duration_sec + 59) // 60)  # Округление вверх
     return minutes * cost_per_minute
 #ТРАНСКРИБАЦИЯ
+# ОБРАБОТКА НА ЗАПРОС ПОЛЬЗОВАТЕЛЯ ОТПРАВИТЬ ТЕКСТ В ЛС
+from aiogram.types import CallbackQuery
+
+@router.callback_query(lambda c: c.data.startswith("send_to_pm_"))
+async def send_to_private(callback_query: CallbackQuery):
+    task_id = callback_query.data.split("_")[-1]
+    user_id = callback_query.from_user.id
+    json_path = f"downloads/{task_id}.json"
+
+    try:
+        if not os.path.exists(json_path):
+            await callback_query.answer("Файл не найден", show_alert=True)
+            return
+
+        with open(json_path, 'r', encoding='utf-8') as f:
+            json_content = json.load(f)
+
+        # json_content - список с сегментами
+        formatted_text = ""
+        for segment in json_content:
+            speaker = segment.get("speaker", "UNKNOWN_SPEAKER")
+            word = segment.get("word", "")
+            formatted_text += f"{speaker}: {word}\n"
+
+        formatted_text = formatted_text.strip()
+        if not formatted_text:
+            await callback_query.answer("Текст пустой, нечего отправлять", show_alert=True)
+            return
+
+        max_length = 4000
+        if len(formatted_text) > max_length:
+            parts = [formatted_text[i:i+max_length] for i in range(0, len(formatted_text), max_length)]
+            for i, part in enumerate(parts, 1):
+                await callback_query.bot.send_message(chat_id=user_id, text=f"Транскрипция (часть {i}):\n{part}")
+            await callback_query.answer("Отправлено в ЛС частями!")
+        else:
+            await callback_query.bot.send_message(chat_id=user_id, text=f"Транскрипция:\n{formatted_text}")
+            await callback_query.answer("Отправлено в ЛС!")
+
+    except Exception as e:
+        logging.error(f"Ошибка при отправке в ЛС: {e}")
+        await callback_query.answer(" Ошибка при отправке в ЛС", show_alert=True)
+
+
