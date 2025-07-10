@@ -46,11 +46,12 @@ def get_result(task_id: str):
     response.raise_for_status()
     return response.json() 
 
-def get_onetime_token():
+def get_onetime_token(tg_id: int):
     headers = {
         "Authorization": f"Bearer {SERVICE_API_TOKEN}",
         "Content-Type": "application/json"
     }
-    response = requests.post(f"{BASE_URL}/token/one-time/create", headers=headers, timeout=30)
+    payload = {"telegram_id": tg_id}
+    response = requests.post(f"{BASE_URL}/token/one-time/create", headers=headers, json=payload, timeout=30)
     response.raise_for_status()
     return response.json()

@@ -108,14 +108,14 @@ async def process_video(message: Message, file_id: str):
         timestamp = datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
         file_name = f"{message.from_user.id}_{timestamp}{file_format}"
         save_path = os.path.join("downloads", file_name)
-    file_format = get_video_format(file_path)
-    if not file_format:
-        logging.error(f"Данный формат видео не поддерживается: {file_path}")
-        message.reply("Данный формат файла не поддерживается. Отправьте другой файл")
+        file_format = get_video_format(file_path)
+        if not file_format:
+            logging.error(f"Данный формат видео не поддерживается: {file_path}")
+            message.reply("Данный формат файла не поддерживается. Отправьте другой файл")
     
-    timestamp = datetime.now().strftime("%Y.%m.%d_%H-%M-%S")# на windows формат "%Y.%m.%d_%H:%M:%S" не работал
-    file_name = f"{message.from_user.id}_{timestamp}{file_format}"
-    save_path = os.path.join("downloads", file_name)
+        timestamp = datetime.now().strftime("%Y.%m.%d_%H-%M-%S")# на windows формат "%Y.%m.%d_%H:%M:%S" не работал
+        file_name = f"{message.from_user.id}_{timestamp}{file_format}"
+        save_path = os.path.join("downloads", file_name)
 
         await bot.download_file(file_path, destination=save_path)
         logging.info("Скачан видео файл")
@@ -174,9 +174,9 @@ async def process_video(message: Message, file_id: str):
                     await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
                 break
             await asyncio.sleep(10)
-        response = get_onetime_token()
+        response = get_onetime_token(tg_id=message.from_user.id)
         reply_button = InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"?token={response.get('token')}")]]
+                inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"http://localhost?token={response.get('token')}")]]
             )
         await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
     except Exception as e:
@@ -221,15 +221,15 @@ async def process_video(message: Message, file_id: str):
                     inline_keyboard=[
                         [InlineKeyboardButton(text="Скачать DOCX", url=docx_url)],
                         [InlineKeyboardButton(text="Скачать PDF", url=pdf_url)],
-                        [InlineKeyboardButton(text="📩 Отправить в ЛС", callback_data=f"send_to_pm_{task_id}")]
+                        [InlineKeyboardButton(text="📩 Отправить в чат", callback_data=f"send_to_pm_{task_id}")]
                     ]
                 )
                 await message.answer("Выберите формат для скачивания результата:", reply_markup=keyboard)
             break
         await asyncio.sleep(10)
-    response = get_token()
+    response = get_onetime_token(tg_id=message.from_user.id)
     reply_button = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"?token={response.get('token')}")]]
+            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"http://localhost?token={response.get('token')}")]]
         )
     await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
 
@@ -311,15 +311,15 @@ async def process_audio(message: Message, file_id: str, file_type: str):
                         inline_keyboard=[
                             [InlineKeyboardButton(text="Скачать DOCX", url=docx_url)],
                             [InlineKeyboardButton(text="Скачать PDF", url=pdf_url)],
-                            [InlineKeyboardButton(text="📩 Отправить в ЛС", callback_data=f"send_to_pm_{task_id}")]
+                            [InlineKeyboardButton(text="📩 Отправить в чат", callback_data=f"send_to_pm_{task_id}")]
                         ]
                     )
                     await message.answer("Выберите формат для скачивания результата:", reply_markup=keyboard)
                 break
             await asyncio.sleep(10)
-        response = get_onetime_token()
+        response = get_onetime_token(tg_id=message.from_user.id)
         reply_button = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"?token={response.get('token')}")]]
+            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"http://localhost?token={response.get('token')}")]]
         )
         await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
     except Exception as e:
