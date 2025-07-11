@@ -113,13 +113,6 @@ async def process_transcription_result(result: dict, task_id: str, message: Mess
         # Загрузка в хранилище
         docx_url, pdf_url = await upload_files_to_storage(docx_path, pdf_path)
         
-        # Удаляем JSON файл после конвертации
-        try:
-            await aiofiles.os.remove(local_json)
-            logging.info(f"Удален JSON файл: {local_json}")
-        except Exception as e:
-            logging.error(f"Ошибка при удалении JSON файла: {e}")
-        
         # Создание клавиатуры
         keyboard = create_download_keyboard(docx_url, pdf_url, task_id)
         await message.answer(
