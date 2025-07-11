@@ -1,0 +1,6 @@
+aiogram==3.7.0
+python-dotenv
+audio-extract
+fastapi
+supabase
+aiofiles
