@@ -51,10 +51,10 @@ async def upload_files_to_storage(docx_path: str, pdf_path: str):
     pdf_name = os.path.basename(pdf_path)
     
     docx_url = await upload_file_to_storage(
-        docx_path, docx_name, 
+        docx_path, f"docs/{docx_name}", 
         content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     )
-    pdf_url = await upload_file_to_storage(pdf_path, pdf_name, content_type='application/pdf')
+    pdf_url = await upload_file_to_storage(pdf_path, f"pdfs/{pdf_name}", content_type='application/pdf')
     
     return docx_url, pdf_url
 
@@ -221,7 +221,7 @@ async def process_video(message: Message, file_id: str):
             await aiofiles.os.remove(output_path)
             return
         
-        file_url = await add_file_to_storage(output_path, audio_file_name)
+        file_url = await add_file_to_storage(output_path, f"audio/{audio_file_name}")
 
         audio = WAVE(output_path)
         duration = audio.info.length
@@ -272,7 +272,7 @@ async def process_audio(message: Message, file_id: str, file_type: str):
             await aiofiles.os.remove(save_path)
             return
         
-        file_url = await add_file_to_storage(save_path, file_name)
+        file_url = await add_file_to_storage(save_path, f"audio/{file_name}")
 
         duration = message.voice.duration if file_type == "voice" else message.audio.duration
         await print_price(duration, message)
