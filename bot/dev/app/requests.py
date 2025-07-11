@@ -55,3 +55,8 @@ def get_onetime_token(tg_id: int):
     response = requests.post(f"{BASE_URL}/token/one-time/create", headers=headers, json=payload, timeout=30)
     response.raise_for_status()
     return response.json()
+
+def authorize_onetime_token(token: str):
+    response = requests.post(f"{BASE_URL}/auth/one-time", params={"token": token}, timeout=30)
+    response.raise_for_status()
+    return response.json()

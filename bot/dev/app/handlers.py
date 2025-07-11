@@ -11,7 +11,7 @@ import app.keyboards as kb
 from audio_extract import extract_audio
 from datetime import datetime
 from app.db_storage import add_file_to_storage, upload_file_to_storage
-from app.requests import start_transcribe, get_status, get_result, get_onetime_token
+from app.requests import start_transcribe, get_status, get_result, get_onetime_token, authorize_onetime_token
 from app.utils.convert import export_dialog
 import asyncio
 import aiofiles.os
@@ -81,7 +81,7 @@ async def send_webapp_link(message: Message):
     try:
         response = get_onetime_token(tg_id=message.from_user.id)
         reply_button = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"http://localhost?token={response.get('token')}")]]
+            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"http://localhost:5173?token={response.get('token')}")]]
         )
         await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
     except Exception as e:
@@ -133,14 +133,31 @@ async def start_transcription_task(file_name: str, file_url: str, message: Messa
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
+    # 1. Получение one-time token
+    try:
+        token_response = get_onetime_token(tg_id=message.from_user.id)
+        token = token_response.get('token')
+    except Exception as e:
+        await message.answer(f'Ошибка при получении one-time token: {e}')
+        return
+
+    # 2. Авторизация по one-time token
+    try:
+        auth_response = authorize_onetime_token(token)
+    except Exception as e:
+        await message.answer(f'Ошибка авторизации: {e}')
+        return
+
+    # 3. Продолжение логики бота
     await message.answer(
-    "🎤 Добро пожаловать в бота для транскрибации аудио!\n\n"
-    "Просто отправьте аудиофайл или голосовое сообщение, и я переведу его в текст.\n"
-    "Первая транскрибация — бесплатно!\n\n"
-    "Стоимость: X за минуту аудио",
-    parse_mode="Markdown",
-    reply_markup=kb.main
-)
+        "🎤 Добро пожаловать в бота для транскрибации аудио!\n\n"
+        "Просто отправьте аудиофайл или голосовое сообщение, и я переведу его в текст.\n"
+        "Первая транскрибация — бесплатно!\n\n"
+        "Стоимость: X за минуту аудио",
+        parse_mode="Markdown",
+        reply_markup=kb.main
+    )
+    
 
 #А НУЖЕН ЛИ ХЕЛП?
 @router.message(Command('help'))
