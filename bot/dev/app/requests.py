@@ -7,11 +7,11 @@ load_dotenv()
 BASE_URL = os.environ.get("BACKEND_URL")
 SERVICE_API_TOKEN = os.getenv("SERVICE_API_TOKEN")
 
-def start_transcribe(file_name: str, file_url: str):
+def start_transcribe(file_name: str, file_url: str, tg_id: int):
     """
     Отправить задачу на транскрибацию (POST /transcribe)
     """
-    payload = {"file_name": file_name, "file_url": file_url}
+    payload = {"file_name": file_name, "file_url": file_url, "telegram_id": tg_id}
     headers = {
         "Authorization": f"Bearer {SERVICE_API_TOKEN}",
         "Content-Type": "application/json"

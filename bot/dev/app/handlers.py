@@ -22,13 +22,15 @@ router = Router()
 
 # Вспомогательные функции
 async def wait_for_transcription_completion(task_id: str, message: Message):
-    """Ожидание завершения транскрибации и обработка результата"""
+    """Ожидание завершения транскрибации и обновление статуса в одном сообщении"""
+    sent_msg = await message.answer("Статус задачи: ⏳ Ожидание...")
     while True:
         status = get_status(task_id)
-        await message.answer(f"Статус задачи: {status.get('status')}")
-        if status.get('status') == 'FINISHED':
+        status_text = status.get('status')
+        await sent_msg.edit_text(f"Статус задачи: {status_text}")
+        if status_text == 'FINISHED':
             result = get_result(task_id)
-            await message.answer(f"Результат: {result.get('result_url')}")
+            await sent_msg.edit_text(f"✅ Готово!\nРезультат: {result.get('result_url')}")
             return result
         await asyncio.sleep(10)
 
@@ -83,7 +85,16 @@ async def send_webapp_link(message: Message):
         reply_button = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"http://localhost:5173?token={response.get('token')}")]]
         )
-        await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
+        await message.answer(
+            "🔗 Вот ссылка на твою расшифровку!\n\n"
+            "🎛️ На сайте можешь:\n"
+            "✏️ Редактировать текст\n"
+            "🎤 Назначать спикеров\n"
+            "⚙️ И многое другое!\n"
+            "Удачной работы! 🚀✨", 
+            parse_mode="Markdown",
+            reply_markup=reply_button
+        )
     except Exception as e:
         logging.error(f"Ошибка при получении токена: {e}")
         await message.answer("Ошибка при создании ссылки на веб-приложение")
@@ -111,7 +122,14 @@ async def process_transcription_result(result: dict, task_id: str, message: Mess
         
         # Создание клавиатуры
         keyboard = create_download_keyboard(docx_url, pdf_url, task_id)
-        await message.answer("Выберите формат для скачивания результата:", reply_markup=keyboard)
+        await message.answer(
+            "🎉 Я обработал твой файл!\n\n"
+            "📋 Выбери, как тебе удобнее получить результат:\n"
+            "📱 Текстом в чат — читай прямо здесь!\n"
+            "📎 Файлом — скачай и сохрани",
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
         
         # Отправка ссылки на веб-приложение
         await send_webapp_link(message)
@@ -123,9 +141,13 @@ async def process_transcription_result(result: dict, task_id: str, message: Mess
 async def start_transcription_task(file_name: str, file_url: str, message: Message):
     """Запуск задачи транскрибации"""
     try:
-        start_resp = start_transcribe(file_name, file_url)
+        start_resp = start_transcribe(file_name, file_url, message.from_user.id)
         task_id = start_resp.get("id")
-        await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
+        await message.answer(
+            f"📋 Твой ID: {task_id}\n\n"
+            "💾 Сохрани на всякий случай — может пригодиться саппорту! 🆘", 
+            parse_mode="Markdown"
+        )
         return task_id
     except Exception as e:
         await message.answer(f"Ошибка при запуске транскрибации: {e}")
@@ -150,10 +172,11 @@ async def cmd_start(message: Message):
 
     # 3. Продолжение логики бота
     await message.answer(
-        "🎤 Добро пожаловать в бота для транскрибации аудио!\n\n"
+        "🎤 Привет! Я расшифровываю видео и аудио!\n\n"
         "Просто отправьте аудиофайл или голосовое сообщение, и я переведу его в текст.\n"
-        "Первая транскрибация — бесплатно!\n\n"
-        "Стоимость: X за минуту аудио",
+        "Первые 20 минут — БЕСПЛАТНО! 🆓\n\n"
+        "Дальше: X рублей за минуту\n"
+        "🚀 Жду твой файл! 📤",
         parse_mode="Markdown",
         reply_markup=kb.main
     )
@@ -164,9 +187,14 @@ async def cmd_start(message: Message):
 async def cmd_help(message: Message):
     await message.answer('Руководство по командам бота:')
 
-@router.message(F.text == 'Выгрузить аудио')
+@router.message(F.text == '📤 Загрузить аудио')
 async def cmd_audio(message: Message):
-    await message.answer('Пожалуйста, отправьте ваш файл')
+    await message.answer(
+        "📁 Жду твое аудио или видео! 🎵🎬\n"
+        "⚠️ Проверь, чтобы файл был не более 2 ГБ\n"
+        "📤 Отправляй! ✨",
+        parse_mode="Markdown",
+    )
 
 
 # ОБРАБОТЧИК ГС
@@ -370,9 +398,12 @@ async def print_price(duration: int, message: Message):
     cost = calculate_cost(duration)  # СТОИМОСТЬ
     prices = [LabeledPrice(label="XTR", amount=int(cost))] 
     await message.answer(
-        f"✅ Файл получен!\n"
-        f"Длительность: {duration // 60}:{duration % 60:02d} мин.\n"
-        f"Стоимость: {cost} XTR")
+        "✅ Получил твой файл!\n"
+        f"⏱️ Длительность: {duration // 60}:{duration % 60:02d} мин.\n"
+        f"💰 Стоимость: {cost} XTR\n"
+        "🔄 Начинаю обработку... ⚡",
+        parse_mode="Markdown",
+    )
 
     # --- ЗАГЛУШКА ОПЛАТЫ ---
     # await message.answer_invoice(
@@ -384,7 +415,7 @@ async def print_price(duration: int, message: Message):
     #     currency="XTR",
     #     reply_markup=kb.payment_keyboard(int(cost)), 
     # )
-    await message.answer("Оплата прошла успешно! Продолжаем обработку...")
+    await message.answer("Оплата прошла успешно! Начинаю обработку...")
 
 async def has_audio(audio_path: str, silence_thresh=-50.0, min_silence_len=1000) -> bool:
     audio = AudioSegment.from_file(audio_path)
