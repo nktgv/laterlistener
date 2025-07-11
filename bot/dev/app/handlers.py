@@ -20,6 +20,102 @@ import json
 
 router = Router()
 
+# Вспомогательные функции
+async def wait_for_transcription_completion(task_id: str, message: Message):
+    """Ожидание завершения транскрибации и обработка результата"""
+    while True:
+        status = get_status(task_id)
+        await message.answer(f"Статус задачи: {status.get('status')}")
+        if status.get('status') == 'FINISHED':
+            result = get_result(task_id)
+            await message.answer(f"Результат: {result.get('result_url')}")
+            return result
+        await asyncio.sleep(10)
+
+async def download_and_convert_result(result_url: str, task_id: str):
+    """Скачивание и конвертация результата в DOCX и PDF"""
+    local_json = f"downloads/{task_id}.json"
+    r = requests.get(result_url)
+    with open(local_json, 'wb') as f:
+        f.write(r.content)
+    
+    # Конвертация в DOCX и PDF
+    docx_path = export_dialog(local_json, file_format='docx')
+    pdf_path = export_dialog(local_json, file_format='pdf')
+    
+    return local_json, docx_path, pdf_path
+
+async def upload_files_to_storage(docx_path: str, pdf_path: str):
+    """Загрузка файлов в Supabase и получение URL"""
+    docx_name = os.path.basename(docx_path)
+    pdf_name = os.path.basename(pdf_path)
+    
+    docx_url = await upload_file_to_storage(
+        docx_path, docx_name, 
+        content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    )
+    pdf_url = await upload_file_to_storage(pdf_path, pdf_name, content_type='application/pdf')
+    
+    return docx_url, pdf_url
+
+def create_download_keyboard(docx_url: str, pdf_url: str, task_id: str):
+    """Создание клавиатуры для скачивания файлов"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Скачать DOCX", url=docx_url)],
+            [InlineKeyboardButton(text="Скачать PDF", url=pdf_url)],
+            [InlineKeyboardButton(text="📩 Отправить в чат", callback_data=f"send_to_pm_{task_id}")]
+        ]
+    )
+
+async def send_webapp_link(message: Message):
+    """Отправка ссылки на веб-приложение"""
+    try:
+        response = get_onetime_token(tg_id=message.from_user.id)
+        reply_button = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"http://localhost?token={response.get('token')}")]]
+        )
+        await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
+    except Exception as e:
+        logging.error(f"Ошибка при получении токена: {e}")
+        await message.answer("Ошибка при создании ссылки на веб-приложение")
+
+async def process_transcription_result(result: dict, task_id: str, message: Message):
+    """Обработка результата транскрибации"""
+    result_url = result.get('result_url')
+    if not result_url:
+        await message.answer("Ошибка: не получен URL результата")
+        return
+    
+    try:
+        # Скачивание и конвертация
+        local_json, docx_path, pdf_path = await download_and_convert_result(result_url, task_id)
+        
+        # Загрузка в хранилище
+        docx_url, pdf_url = await upload_files_to_storage(docx_path, pdf_path)
+        
+        # Создание клавиатуры
+        keyboard = create_download_keyboard(docx_url, pdf_url, task_id)
+        await message.answer("Выберите формат для скачивания результата:", reply_markup=keyboard)
+        
+        # Отправка ссылки на веб-приложение
+        await send_webapp_link(message)
+        
+    except Exception as e:
+        logging.error(f"Ошибка при обработке результата: {e}")
+        await message.answer("Ошибка при обработке результата транскрибации")
+
+async def start_transcription_task(file_name: str, file_url: str, message: Message):
+    """Запуск задачи транскрибации"""
+    try:
+        start_resp = start_transcribe(file_name, file_url)
+        task_id = start_resp.get("id")
+        await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
+        return task_id
+    except Exception as e:
+        await message.answer(f"Ошибка при запуске транскрибации: {e}")
+        return None
+
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     await message.answer(
@@ -103,17 +199,10 @@ async def process_video(message: Message, file_id: str):
         file_format = get_video_format(file_path.lower())
         if not file_format:
             logging.error(f"Данный формат видео не поддерживается: {file_path}")
-            message.reply("Данный формат файла не поддерживается. Отправьте другой файл")
+            await message.reply("Данный формат файла не поддерживается. Отправьте другой файл")
+            return
         
-        timestamp = datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
-        file_name = f"{message.from_user.id}_{timestamp}{file_format}"
-        save_path = os.path.join("downloads", file_name)
-        file_format = get_video_format(file_path)
-        if not file_format:
-            logging.error(f"Данный формат видео не поддерживается: {file_path}")
-            message.reply("Данный формат файла не поддерживается. Отправьте другой файл")
-    
-        timestamp = datetime.now().strftime("%Y.%m.%d_%H-%M-%S")# на windows формат "%Y.%m.%d_%H:%M:%S" не работал
+        timestamp = datetime.now().strftime("%Y.%m.%d_%H-%M-%S")
         file_name = f"{message.from_user.id}_{timestamp}{file_format}"
         save_path = os.path.join("downloads", file_name)
 
@@ -139,99 +228,17 @@ async def process_video(message: Message, file_id: str):
         logging.info(f"Получена длина аудио дорожки: {duration:.2f}")
         await print_price(int(duration), message)
 
-        # --- API: старт транскрибации ---
-        try:
-            start_resp = start_transcribe(output_path, file_url)
-            task_id = start_resp.get("id")
-            await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
-        except Exception as e:
-            await message.answer(f"Ошибка при запуске транскрибации: {e}")
+        # Запуск транскрибации
+        task_id = await start_transcription_task(audio_file_name, file_url, message)
+        if not task_id:
             return
-        # --- API: пример опроса статуса и получения результата ---
-        while True:
-            status = get_status(task_id)
-            await message.answer(f"Статус задачи: {status.get('status')}")
-            if status.get('status') == 'FINISHED':
-                result = get_result(task_id)
-                await message.answer(f"Результат: {result.get('result_url')}")
-                # --- СКАЧИВАНИЕ, КОНВЕРТАЦИЯ, КНОПКА ---
-                import requests
-                result_url = result.get('result_url')
-                if result_url:
-                    local_json = f"downloads/{task_id}.json"
-                    r = requests.get(result_url)
-                    with open(local_json, 'wb') as f:
-                        f.write(r.content)
-                    # Конвертация в docx
-                    docx_path = await asyncio.to_thread(export_dialog, local_json, file_format='docx')
-                    # Загрузка docx в Supabase
-                    docx_name = os.path.basename(docx_path)
-                    docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-                    # Кнопка для скачивания
-                    keyboard = InlineKeyboardMarkup(
-                        inline_keyboard=[[InlineKeyboardButton(text="Скачать DOCX", url=docx_url)]]
-                    )
-                    await message.answer("Скачать результат в DOCX:", reply_markup=keyboard)
-                break
-            await asyncio.sleep(10)
-        response = get_onetime_token(tg_id=message.from_user.id)
-        reply_button = InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"http://localhost?token={response.get('token')}")]]
-            )
-        await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
+
+        # Ожидание завершения и обработка результата
+        result = await wait_for_transcription_completion(task_id, message)
+        await process_transcription_result(result, task_id, message)
+        
     except Exception as e:
         logging.error(f"Ошибка обработки видео: {str(e)}")
-    # --- API: старт транскрибации ---
-    try:
-        start_resp = start_transcribe(file_name, file_url)
-        task_id = start_resp.get("id")
-        await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
-    except Exception as e:
-        await message.answer(f"Ошибка при запуске транскрибации: {e}")
-        return
-    # --- API: пример опроса статуса и получения результата ---
-    import asyncio
-
-    while True:
-        status = get_status(task_id)
-        await message.answer(f"Статус задачи: {status.get('status')}")
-        if status.get('status') == 'FINISHED':
-            result = get_result(task_id)
-            # Скачивание JSON результата
-            result_url = result.get('result_url')
-            if result_url:
-                local_json = f"downloads/{task_id}.json"
-                r = requests.get(result_url)
-                with open(local_json, 'wb') as f:
-                    f.write(r.content)
-
-                # Конвертация в DOCX и PDF
-                docx_path = export_dialog(local_json, file_format='docx')
-                pdf_path = export_dialog(local_json, file_format='pdf')
-
-                # Загрузка в Supabase
-                docx_name = os.path.basename(docx_path)
-                pdf_name = os.path.basename(pdf_path)
-
-                docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-                pdf_url = await upload_file_to_storage(pdf_path, pdf_name, content_type='application/pdf')
-
-                # ПАНЕЛЬ ВЫБОРА ФОРМАТА
-                keyboard = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [InlineKeyboardButton(text="Скачать DOCX", url=docx_url)],
-                        [InlineKeyboardButton(text="Скачать PDF", url=pdf_url)],
-                        [InlineKeyboardButton(text="📩 Отправить в чат", callback_data=f"send_to_pm_{task_id}")]
-                    ]
-                )
-                await message.answer("Выберите формат для скачивания результата:", reply_markup=keyboard)
-            break
-        await asyncio.sleep(10)
-    response = get_onetime_token(tg_id=message.from_user.id)
-    reply_button = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"http://localhost?token={response.get('token')}")]]
-        )
-    await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
 
 def get_video_format(file_path: str) -> Optional[str]:
     formats = [".webm", ".mp4", ".mov", ".avi", ".mkv"]
@@ -248,7 +255,7 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         file = await bot.get_file(file_id)
         file_path = file.file_path    
 
-        timestamp = datetime.now().strftime("%Y.%m.%d_%H-%M-%S")# на windows формат "%Y.%m.%d_%H:%M:%S" не работал
+        timestamp = datetime.now().strftime("%Y.%m.%d_%H-%M-%S")
         # ИМЯ ФАЙЛА
         audio_format = get_audio_format(file_path.lower())
         file_name = f"{message.from_user.id}_{timestamp}{audio_format}"
@@ -262,7 +269,7 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         if not await has_audio(save_path):
             logging.error(f"Файл не содержит звука или битый")
             await message.answer('Файл тихий или битый, загрузите качественный аудио файл')
-            aiofiles.os.remove(save_path)
+            await aiofiles.os.remove(save_path)
             return
         
         file_url = await add_file_to_storage(save_path, file_name)
@@ -270,58 +277,15 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         duration = message.voice.duration if file_type == "voice" else message.audio.duration
         await print_price(duration, message)
 
-        # --- API: старт транскрибации ---
-        try:
-            start_resp = start_transcribe(file_name, file_url)
-            task_id = start_resp.get("id")
-            await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
-        except Exception as e:
-            await message.answer(f"Ошибка при запуске транскрибации: {e}")
+        # Запуск транскрибации
+        task_id = await start_transcription_task(file_name, file_url, message)
+        if not task_id:
             return
-        # --- API: пример опроса статуса и получения результата ---
-        while True:
-            status = get_status(task_id)
-            await message.answer(f"Статус задачи: {status.get('status')}")
-            if status.get('status') == 'FINISHED':
-                result = get_result(task_id)
-                # Скачивание JSON результата
-                result_url = result.get('result_url')
-                if result_url:
-                    local_json = f"downloads/{task_id}.json"
-                    r = requests.get(result_url)
-                    with open(local_json, 'wb') as f:
-                        f.write(r.content)
-                    # Конвертация в docx
-                    docx_path = await asyncio.to_thread(export_dialog, local_json, file_format='docx')
-                    # Загрузка docx в Supabase
 
-                    # Конвертация в DOCX и PDF
-                    docx_path = export_dialog(local_json, file_format='docx')
-                    pdf_path = export_dialog(local_json, file_format='pdf')
-
-                    # Загрузка в Supabase
-                    docx_name = os.path.basename(docx_path)
-                    pdf_name = os.path.basename(pdf_path)
-
-                    docx_url = await upload_file_to_storage(docx_path, docx_name, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-                    pdf_url = await upload_file_to_storage(pdf_path, pdf_name, content_type='application/pdf')
-
-                    # ПАНЕЛЬ ВЫБОРА ФОРМАТА
-                    keyboard = InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text="Скачать DOCX", url=docx_url)],
-                            [InlineKeyboardButton(text="Скачать PDF", url=pdf_url)],
-                            [InlineKeyboardButton(text="📩 Отправить в чат", callback_data=f"send_to_pm_{task_id}")]
-                        ]
-                    )
-                    await message.answer("Выберите формат для скачивания результата:", reply_markup=keyboard)
-                break
-            await asyncio.sleep(10)
-        response = get_onetime_token(tg_id=message.from_user.id)
-        reply_button = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"http://localhost?token={response.get('token')}")]]
-        )
-        await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
+        # Ожидание завершения и обработка результата
+        result = await wait_for_transcription_completion(task_id, message)
+        await process_transcription_result(result, task_id, message)
+        
     except Exception as e:
         logging.error(f"Error: {str(e)}")
                       
@@ -420,5 +384,3 @@ async def send_to_private(callback_query: CallbackQuery):
     except Exception as e:
         logging.error(f"Ошибка при отправке в ЛС: {e}")
         await callback_query.answer(" Ошибка при отправке в ЛС", show_alert=True)
-
-
