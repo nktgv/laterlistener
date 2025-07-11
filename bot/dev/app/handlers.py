@@ -179,15 +179,11 @@ async def handle_video(message: Message):
     file_id = message.video.file_id
     file_size = message.video.file_size
     logging.info(f"Размер файла: {file_size}")
-    max_size = 200 * 1024 * 1024
-    if file_size < max_size:
-        try:
-            await process_video(message, file_id)
-        except Exception as e:
-            logging.error(f"Ошибка обработки видео: {str(e)}")
-            return
-    else:
-        await message.reply("Файл слишком большой, максимальный размер 20МБ, отправьте другой файл")
+    try:
+        await process_video(message, file_id)
+    except Exception as e:
+        logging.error(f"Ошибка обработки видео: {str(e)}")
+        return
 
 # ОБРАБОТЧИК КРУЖОЧКОВ В ТГ
 @router.message(F.content_type == "video_note")
