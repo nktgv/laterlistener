@@ -83,14 +83,14 @@ async def send_webapp_link(message: Message):
     try:
         response = get_onetime_token(tg_id=message.from_user.id)
         reply_button = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"http://localhost:5173?token={response.get('token')}")]]
+            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"https://139.59.145.185?token={response.get('token')}")]]
         )
         await message.answer(
             "🔗 Вот ссылка на твою расшифровку!\n\n"
-            "🎛️ На сайте можешь:\n"
+            "🎛️ На сайте можешь:\n\n"
             "✏️ Редактировать текст\n"
             "🎤 Назначать спикеров\n"
-            "⚙️ И многое другое!\n"
+            "⚙️ И многое другое!\n\n"
             "Удачной работы! 🚀✨", 
             parse_mode="Markdown",
             reply_markup=reply_button
