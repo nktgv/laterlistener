@@ -56,6 +56,14 @@ async def upload_files_to_storage(docx_path: str, pdf_path: str):
     )
     pdf_url = await upload_file_to_storage(pdf_path, f"pdfs/{pdf_name}", content_type='application/pdf')
     
+    # Удаляем локальные файлы после загрузки в storage
+    try:
+        await aiofiles.os.remove(docx_path)
+        await aiofiles.os.remove(pdf_path)
+        logging.info(f"Удалены локальные файлы: {docx_path}, {pdf_path}")
+    except Exception as e:
+        logging.error(f"Ошибка при удалении файлов: {e}")
+    
     return docx_url, pdf_url
 
 def create_download_keyboard(docx_url: str, pdf_url: str, task_id: str):
@@ -93,6 +101,13 @@ async def process_transcription_result(result: dict, task_id: str, message: Mess
         
         # Загрузка в хранилище
         docx_url, pdf_url = await upload_files_to_storage(docx_path, pdf_path)
+        
+        # Удаляем JSON файл после конвертации
+        try:
+            await aiofiles.os.remove(local_json)
+            logging.info(f"Удален JSON файл: {local_json}")
+        except Exception as e:
+            logging.error(f"Ошибка при удалении JSON файла: {e}")
         
         # Создание клавиатуры
         keyboard = create_download_keyboard(docx_url, pdf_url, task_id)
@@ -217,16 +232,29 @@ async def process_video(message: Message, file_id: str):
         if not await has_audio(output_path):
             logging.error(f"Файл не содержит звука или битый")
             await message.answer('Файл тихий или битый, загрузите качественный аудио файл')
-            await aiofiles.os.remove(save_path)
-            await aiofiles.os.remove(output_path)
+            # Удаляем все временные файлы
+            try:
+                await aiofiles.os.remove(save_path)
+                await aiofiles.os.remove(output_path)
+                logging.info(f"Удалены временные файлы: {save_path}, {output_path}")
+            except Exception as e:
+                logging.error(f"Ошибка при удалении временных файлов: {e}")
             return
         
         file_url = await add_file_to_storage(output_path, f"audio/{audio_file_name}")
 
+        # Получаем длительность аудио перед удалением файла
         audio = WAVE(output_path)
         duration = audio.info.length
         logging.info(f"Получена длина аудио дорожки: {duration:.2f}")
         await print_price(int(duration), message)
+
+        # Удаляем аудио файл после загрузки в storage
+        try:
+            await aiofiles.os.remove(output_path)
+            logging.info(f"Удален аудио файл: {output_path}")
+        except Exception as e:
+            logging.error(f"Ошибка при удалении аудио файла: {e}")
 
         # Запуск транскрибации
         task_id = await start_transcription_task(audio_file_name, file_url, message)
@@ -239,6 +267,15 @@ async def process_video(message: Message, file_id: str):
         
     except Exception as e:
         logging.error(f"Ошибка обработки видео: {str(e)}")
+        # Очищаем временные файлы в случае ошибки
+        try:
+            if 'save_path' in locals():
+                await aiofiles.os.remove(save_path)
+            if 'output_path' in locals():
+                await aiofiles.os.remove(output_path)
+            logging.info("Очищены временные файлы после ошибки")
+        except Exception as cleanup_error:
+            logging.error(f"Ошибка при очистке временных файлов: {cleanup_error}")
 
 def get_video_format(file_path: str) -> Optional[str]:
     formats = [".webm", ".mp4", ".mov", ".avi", ".mkv"]
@@ -269,10 +306,22 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         if not await has_audio(save_path):
             logging.error(f"Файл не содержит звука или битый")
             await message.answer('Файл тихий или битый, загрузите качественный аудио файл')
-            await aiofiles.os.remove(save_path)
+            # Удаляем временный файл
+            try:
+                await aiofiles.os.remove(save_path)
+                logging.info(f"Удален временный файл: {save_path}")
+            except Exception as e:
+                logging.error(f"Ошибка при удалении временного файла: {e}")
             return
         
         file_url = await add_file_to_storage(save_path, f"audio/{file_name}")
+
+        # Удаляем аудио файл после загрузки в storage
+        try:
+            await aiofiles.os.remove(save_path)
+            logging.info(f"Удален аудио файл: {save_path}")
+        except Exception as e:
+            logging.error(f"Ошибка при удалении аудио файла: {e}")
 
         duration = message.voice.duration if file_type == "voice" else message.audio.duration
         await print_price(duration, message)
@@ -288,6 +337,13 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         
     except Exception as e:
         logging.error(f"Error: {str(e)}")
+        # Очищаем временные файлы в случае ошибки
+        try:
+            if 'save_path' in locals():
+                await aiofiles.os.remove(save_path)
+            logging.info("Очищен временный файл после ошибки")
+        except Exception as cleanup_error:
+            logging.error(f"Ошибка при очистке временного файла: {cleanup_error}")
                       
 def get_audio_format(file_path: str) -> Optional[str]:
     formats = [".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".oga"]
