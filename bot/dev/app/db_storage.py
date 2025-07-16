@@ -1,6 +1,7 @@
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import os
+import asyncio
 
 load_dotenv()
 SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "url")
@@ -26,3 +27,22 @@ async def upload_file_to_storage(file_path: str, file_name: str, content_type: s
         raise Exception("Ошибка добавления файла в хранилище")
     file_url = supabase_conn.storage.from_(SUPABASE_BUCKET).get_public_url(file_name)
     return file_url
+
+# Новая асинхронная функция для загрузки файла
+async def add_file_to_storage_async(file_path: str, audio_file_name: str) -> str:
+    def upload():
+        with open(file_path, "rb") as f:
+            res = supabase_conn.storage.from_(SUPABASE_BUCKET).upload(audio_file_name, f, {"content-type": "audio/wav"})
+        if not res:
+            raise Exception("Ошибка добавления файла в хранилище")
+        return supabase_conn.storage.from_(SUPABASE_BUCKET).get_public_url(audio_file_name)
+    return await asyncio.to_thread(upload)
+
+async def upload_file_to_storage_async(file_path: str, file_name: str, content_type: str = "application/octet-stream") -> str:
+    def upload():
+        with open(file_path, "rb") as f:
+            res = supabase_conn.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": content_type})
+        if not res:
+            raise Exception("Ошибка добавления файла в хранилище")
+        return supabase_conn.storage.from_(SUPABASE_BUCKET).get_public_url(file_name)
+    return await asyncio.to_thread(upload)

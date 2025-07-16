@@ -10,7 +10,7 @@ import logging
 import app.keyboards as kb
 from audio_extract import extract_audio
 from datetime import datetime
-from app.db_storage import add_file_to_storage, upload_file_to_storage
+from app.db_storage import add_file_to_storage, upload_file_to_storage, add_file_to_storage_async, upload_file_to_storage_async
 from app.requests import start_transcribe, get_status, get_result, get_onetime_token, authorize_onetime_token
 from app.utils.convert import export_dialog
 import asyncio
@@ -27,7 +27,15 @@ async def wait_for_transcription_completion(task_id: str, message: Message):
     while True:
         status = get_status(task_id)
         status_text = status.get('status')
-        await sent_msg.edit_text(f"Статус задачи: {status_text}")
+        new_text = f"Статус задачи: {status_text}"
+        if new_text != sent_msg.text:
+            try:
+                await sent_msg.edit_text(new_text)
+                sent_msg.text = new_text  # вручную обновляем, т.к. aiogram Message не обновляет text после edit
+
+            except Exception as e:
+                logging.error(f"Ошибка при обновлении статуса: {e}")
+        
         if status_text == 'FINISHED':
             result = get_result(task_id)
             await sent_msg.edit_text(f"✅ Готово!\nРезультат: {result.get('result_url')}")
@@ -37,9 +45,13 @@ async def wait_for_transcription_completion(task_id: str, message: Message):
 async def download_and_convert_result(result_url: str, task_id: str):
     """Скачивание и конвертация результата в DOCX и PDF"""
     local_json = f"downloads/{task_id}.json"
-    r = requests.get(result_url)
-    with open(local_json, 'wb') as f:
-        f.write(r.content)
+    if os.path.exists(result_url):
+        import shutil
+        await asyncio.to_thread(shutil.copy, result_url, local_json)
+    else:
+        r = await asyncio.to_thread(requests.get, result_url)
+        with open(local_json, 'wb') as f:
+            f.write(r.content)
     
     # Конвертация в DOCX и PDF
     docx_path = export_dialog(local_json, file_format='docx')
@@ -52,11 +64,11 @@ async def upload_files_to_storage(docx_path: str, pdf_path: str):
     docx_name = os.path.basename(docx_path)
     pdf_name = os.path.basename(pdf_path)
     
-    docx_url = await upload_file_to_storage(
+    docx_url = await upload_file_to_storage_async(
         docx_path, f"docs/{docx_name}", 
         content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     )
-    pdf_url = await upload_file_to_storage(pdf_path, f"pdfs/{pdf_name}", content_type='application/pdf')
+    pdf_url = await upload_file_to_storage_async(pdf_path, f"pdfs/{pdf_name}", content_type='application/pdf')
     
     # Удаляем локальные файлы после загрузки в storage
     try:
@@ -194,21 +206,15 @@ async def cmd_audio(message: Message):
 @router.message(F.voice)
 async def handle_voice(message: Message):
     file_id = message.voice.file_id
-    try:
-        await process_audio(message, file_id, "voice")
-    except Exception as e:
-        logging.error(f"Ошибка обработки гс: {str(e)}")
-        return
+    await message.answer('Файл получен! Начинаю обработку, это может занять несколько минут...')
+    asyncio.create_task(process_audio(message, file_id, "voice"))
 
 # ОБРАБОТЧИК АУДИО
 @router.message(F.audio)
 async def handle_audio(message: Message):
     file_id = message.audio.file_id
-    try:
-        await process_audio(message, file_id, "audio")
-    except Exception as e:
-        logging.error(f"Ошибка обработки аудио файла: {str(e)}")
-        return
+    await message.answer('Файл получен! Начинаю обработку, это может занять несколько минут...')
+    asyncio.create_task(process_audio(message, file_id, "audio"))
 
 # ОБРАБОТЧИК ВИДЕО
 @router.message(F.content_type == "video")
@@ -217,21 +223,15 @@ async def handle_video(message: Message):
     file_id = message.video.file_id
     file_size = message.video.file_size
     logging.info(f"Размер файла: {file_size}")
-    try:
-        await process_video(message, file_id)
-    except Exception as e:
-        logging.error(f"Ошибка обработки видео: {str(e)}")
-        return
+    await message.answer('Файл получен! Начинаю обработку, это может занять несколько минут...')
+    asyncio.create_task(process_video(message, file_id))
 
 # ОБРАБОТЧИК КРУЖОЧКОВ В ТГ
 @router.message(F.content_type == "video_note")
 async def handle_video_note(message: Message):
     file_id = message.video_note.file_id
-    try:
-        await process_video(message, file_id)
-    except Exception as e:
-        logging.error(f"Ошибка обработки кружочка в тг: {str(e)}")
-        return
+    await message.answer('Файл получен! Начинаю обработку, это может занять несколько минут...')
+    asyncio.create_task(process_video(message, file_id))
 
 # ОБРАБОТЧИК ФАЙЛОВ НЕ ЯВЛЯЮЩИХСЯ АУДИО ИЛИ ГС 
 @router.message(F.photo | F.document)
@@ -275,7 +275,7 @@ async def process_video(message: Message, file_id: str):
                 logging.error(f"Ошибка при удалении временных файлов: {e}")
             return
         
-        file_url = await add_file_to_storage(output_path, f"audio/{audio_file_name}")
+        file_url = await add_file_to_storage_async(output_path, f"audio/{audio_file_name}")
 
         # Получаем длительность аудио перед удалением файла
         audio = WAVE(output_path)
@@ -337,18 +337,11 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         logging.info(f"Файл сохранен: {save_path}")
 
         # ПРОВЕРКА НА ЗВУК В ФАЙЛЕ
-        if not await has_audio(save_path):
-            logging.error(f"Файл не содержит звука или битый")
-            await message.answer('Файл тихий или битый, загрузите качественный аудио файл')
-            # Удаляем временный файл
-            try:
-                await aiofiles.os.remove(save_path)
-                logging.info(f"Удален временный файл: {save_path}")
-            except Exception as e:
-                logging.error(f"Ошибка при удалении временного файла: {e}")
-            return
+        #if not await has_audio(save_path):
+        #    logging.error(f"Файл не содержит звука или битый")
+        #    await message.answer('Файл тихий или битый, загрузите качественный аудио файл')
         
-        file_url = await add_file_to_storage(save_path, f"audio/{file_name}")
+        file_url = await add_file_to_storage_async(save_path, f"audio/{file_name}")
 
         # Удаляем аудио файл после загрузки в storage
         try:
