@@ -4,3 +4,8 @@ audio-extract
 fastapi
 supabase
 aiofiles
+pydub
+requests
+docx
+python-docx
+docx2pdf

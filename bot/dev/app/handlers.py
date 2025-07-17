@@ -18,6 +18,11 @@ import aiofiles.os
 import requests
 import json 
 
+from aiogram.fsm.context import FSMContext
+from app.balance.states import Pay
+from app.keyboards import balance_menu
+from app.balance.fake_datapase import get_balance, add_balance, add_user
+
 router = Router()
 
 # Вспомогательные функции
@@ -186,6 +191,65 @@ async def cmd_start(message: Message):
         reply_markup=kb.main
     )
     
+#БАЛАНС    
+@router.message(F.text == "Баланс")
+async def balance_handler(message: Message):
+    await add_user(message.from_user.id)
+    await message.answer("Меню управления балансом:", reply_markup=balance_menu())
+
+@router.callback_query(F.data == "balance_check")
+async def check_balance(callback: CallbackQuery):
+    balance = await get_balance(callback.from_user.id)
+    await callback.message.answer(f"Ваш баланс: {balance} минут ⏱️")
+    await callback.answer()
+
+@router.callback_query(F.data == "balance_add")
+async def add_balance_start(callback: CallbackQuery):
+    await callback.message.answer("Выберите пакет минут:", reply_markup=kb.packages_keyboard())
+    await callback.answer()
+
+PACKAGE_MAP = {
+    "buy_100": {"minutes": 115, "stars": 100},
+    "buy_200": {"minutes": 230, "stars": 200},
+    "buy_300": {"minutes": 350, "stars": 300},
+}
+
+@router.callback_query(F.data.startswith("buy_"))
+async def package_purchase(callback: CallbackQuery, state: FSMContext):
+    package = PACKAGE_MAP.get(callback.data)
+    if not package:
+        await callback.answer("Неизвестный пакет.")
+        return
+
+    await state.update_data(package=package)
+
+    await callback.message.answer_invoice(
+        title="Покупка минут",
+        description=f"{package['minutes']} минут за {package['stars']}⭐️",
+        payload="package_payment",
+        provider_token="",  
+        currency="XTR",
+        prices=[LabeledPrice(label="Пакет минут", amount=package['stars'])],
+        reply_markup=kb.payment_keyboard(int(package['stars']))
+    )
+
+    await state.set_state(Pay.wait_payment)
+    await callback.answer()
+
+@router.pre_checkout_query()
+async def pre_checkout_query_handler(pre_checkout_query: PreCheckoutQuery):
+    await pre_checkout_query.answer(ok=True)
+
+@router.message(F.successful_payment)
+async def successful_payment_handler(message: Message, state: FSMContext):
+    data = await state.get_data()
+    package = data.get("package")
+    if package:
+        await add_balance(message.from_user.id, package["minutes"])
+        await message.answer(f"✅ Баланс пополнен на {package['minutes']} минут ⏱️")
+    else:
+        await message.answer("Произошла ошибка при начислении пакета.")
+    await state.clear()
 
 #А НУЖЕН ЛИ ХЕЛП?
 @router.message(Command('help'))
