@@ -32,4 +32,3 @@ def packages_keyboard():
             [InlineKeyboardButton(text="Назад", callback_data="back_to_balance_menu")]
         ]
     )
-

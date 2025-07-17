@@ -1,7 +1,7 @@
 from typing import Optional
 from aiogram import F, Router
 from mutagen.wave import WAVE
-from aiogram.types import Message, LabeledPrice, PreCheckoutQuery, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery#ДЛЯ УПРАВЛЕНИЯ КЛАВИАТУРОЙ
+from aiogram.types import Message, LabeledPrice, PreCheckoutQuery, InlineKeyboardMarkup, InlineKeyboardButton
 import os
 from aiogram.filters import CommandStart, Command
 from pydub import AudioSegment
@@ -10,8 +10,8 @@ import logging
 import app.keyboards as kb
 from audio_extract import extract_audio
 from datetime import datetime
-from app.db_storage import add_file_to_storage, upload_file_to_storage
-from app.requests import start_transcribe, get_status, get_result, get_onetime_token
+from app.db_storage import add_file_to_storage, upload_file_to_storage, add_file_to_storage_async, upload_file_to_storage_async
+from app.requests import start_transcribe, get_status, get_result, get_onetime_token, authorize_onetime_token
 from app.utils.convert import export_dialog
 import asyncio
 import aiofiles.os
@@ -27,22 +27,36 @@ router = Router()
 
 # Вспомогательные функции
 async def wait_for_transcription_completion(task_id: str, message: Message):
-    """Ожидание завершения транскрибации и обработка результата"""
+    """Ожидание завершения транскрибации и обновление статуса в одном сообщении"""
+    sent_msg = await message.answer("Статус задачи: ⏳ Ожидание...")
     while True:
         status = get_status(task_id)
-        await message.answer(f"Статус задачи: {status.get('status')}")
-        if status.get('status') == 'FINISHED':
+        status_text = status.get('status')
+        new_text = f"Статус задачи: {status_text}"
+        if new_text != sent_msg.text:
+            try:
+                await sent_msg.edit_text(new_text)
+                sent_msg.text = new_text  # вручную обновляем, т.к. aiogram Message не обновляет text после edit
+
+            except Exception as e:
+                logging.error(f"Ошибка при обновлении статуса: {e}")
+        
+        if status_text == 'FINISHED':
             result = get_result(task_id)
-            await message.answer(f"Результат: {result.get('result_url')}")
+            await sent_msg.edit_text(f"✅ Готово!\nРезультат: {result.get('result_url')}")
             return result
         await asyncio.sleep(10)
 
 async def download_and_convert_result(result_url: str, task_id: str):
     """Скачивание и конвертация результата в DOCX и PDF"""
     local_json = f"downloads/{task_id}.json"
-    r = requests.get(result_url)
-    with open(local_json, 'wb') as f:
-        f.write(r.content)
+    if os.path.exists(result_url):
+        import shutil
+        await asyncio.to_thread(shutil.copy, result_url, local_json)
+    else:
+        r = await asyncio.to_thread(requests.get, result_url)
+        with open(local_json, 'wb') as f:
+            f.write(r.content)
     
     # Конвертация в DOCX и PDF
     docx_path = export_dialog(local_json, file_format='docx')
@@ -55,11 +69,11 @@ async def upload_files_to_storage(docx_path: str, pdf_path: str):
     docx_name = os.path.basename(docx_path)
     pdf_name = os.path.basename(pdf_path)
     
-    docx_url = await upload_file_to_storage(
+    docx_url = await upload_file_to_storage_async(
         docx_path, f"docs/{docx_name}", 
         content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     )
-    pdf_url = await upload_file_to_storage(pdf_path, f"pdfs/{pdf_name}", content_type='application/pdf')
+    pdf_url = await upload_file_to_storage_async(pdf_path, f"pdfs/{pdf_name}", content_type='application/pdf')
     
     # Удаляем локальные файлы после загрузки в storage
     try:
@@ -86,9 +100,18 @@ async def send_webapp_link(message: Message):
     try:
         response = get_onetime_token(tg_id=message.from_user.id)
         reply_button = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"http://localhost?token={response.get('token')}")]]
+            inline_keyboard=[[InlineKeyboardButton(text='Перейти в веб-приложение', url=f"https://139.59.145.185?token={response.get('token')}")]]
         )
-        await message.answer("Ваш текст расшифрован, вы можете перейти в веб-приложение", reply_markup=reply_button)
+        await message.answer(
+            "🔗 Вот ссылка на твою расшифровку!\n\n"
+            "🎛️ На сайте можешь:\n\n"
+            "✏️ Редактировать текст\n"
+            "🎤 Назначать спикеров\n"
+            "⚙️ И многое другое!\n\n"
+            "Удачной работы! 🚀✨", 
+            parse_mode="Markdown",
+            reply_markup=reply_button
+        )
     except Exception as e:
         logging.error(f"Ошибка при получении токена: {e}")
         await message.answer("Ошибка при создании ссылки на веб-приложение")
@@ -107,16 +130,16 @@ async def process_transcription_result(result: dict, task_id: str, message: Mess
         # Загрузка в хранилище
         docx_url, pdf_url = await upload_files_to_storage(docx_path, pdf_path)
         
-        # Удаляем JSON файл после конвертации
-        try:
-            await aiofiles.os.remove(local_json)
-            logging.info(f"Удален JSON файл: {local_json}")
-        except Exception as e:
-            logging.error(f"Ошибка при удалении JSON файла: {e}")
-        
         # Создание клавиатуры
         keyboard = create_download_keyboard(docx_url, pdf_url, task_id)
-        await message.answer("Выберите формат для скачивания результата:", reply_markup=keyboard)
+        await message.answer(
+            "🎉 Я обработал твой файл!\n\n"
+            "📋 Выбери, как тебе удобнее получить результат:\n"
+            "📱 Текстом в чат — читай прямо здесь!\n"
+            "📎 Файлом — скачай и сохрани",
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
         
         # Отправка ссылки на веб-приложение
         await send_webapp_link(message)
@@ -128,9 +151,13 @@ async def process_transcription_result(result: dict, task_id: str, message: Mess
 async def start_transcription_task(file_name: str, file_url: str, message: Message):
     """Запуск задачи транскрибации"""
     try:
-        start_resp = start_transcribe(file_name, file_url)
+        start_resp = start_transcribe(file_name, file_url, message.from_user.id)
         task_id = start_resp.get("id")
-        await message.answer(f"Задача на транскрибацию отправлена! ID: {task_id}")
+        await message.answer(
+            f"📋 Твой ID: {task_id}\n\n"
+            "💾 Сохрани на всякий случай — может пригодиться саппорту! 🆘", 
+            parse_mode="Markdown"
+        )
         return task_id
     except Exception as e:
         await message.answer(f"Ошибка при запуске транскрибации: {e}")
@@ -138,14 +165,32 @@ async def start_transcription_task(file_name: str, file_url: str, message: Messa
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
+    # 1. Получение one-time token
+    try:
+        token_response = get_onetime_token(tg_id=message.from_user.id)
+        token = token_response.get('token')
+    except Exception as e:
+        await message.answer(f'Ошибка при получении one-time token: {e}')
+        return
+
+    # 2. Авторизация по one-time token
+    try:
+        auth_response = authorize_onetime_token(token)
+    except Exception as e:
+        await message.answer(f'Ошибка авторизации: {e}')
+        return
+
+    # 3. Продолжение логики бота
     await message.answer(
-    "🎤 Добро пожаловать в бота для транскрибации аудио!\n\n"
-    "Просто отправьте аудиофайл или голосовое сообщение, и я переведу его в текст.\n"
-    "Первая транскрибация — бесплатно!\n\n"
-    "Стоимость: X за минуту аудио",
-    parse_mode="Markdown",
-    reply_markup=kb.main
-)
+        "🎤 Привет! Я расшифровываю видео и аудио!\n\n"
+        "Просто отправьте аудиофайл или голосовое сообщение, и я переведу его в текст.\n"
+        "Первые 20 минут — БЕСПЛАТНО! 🆓\n\n"
+        "Дальше: X рублей за минуту\n"
+        "🚀 Жду твой файл! 📤",
+        parse_mode="Markdown",
+        reply_markup=kb.main
+    )
+    
 #БАЛАНС    
 @router.message(F.text == "Баланс")
 async def balance_handler(message: Message):
@@ -211,30 +256,29 @@ async def successful_payment_handler(message: Message, state: FSMContext):
 async def cmd_help(message: Message):
     await message.answer('Руководство по командам бота:')
 
-@router.message(F.text == 'Выгрузить аудио')
+@router.message(F.text == '📤 Загрузить аудио')
 async def cmd_audio(message: Message):
-    await message.answer('Пожалуйста, отправьте ваш файл')
+    await message.answer(
+        "📁 Жду твое аудио или видео! 🎵🎬\n"
+        "⚠️ Проверь, чтобы файл был не более 2 ГБ\n"
+        "📤 Отправляй! ✨",
+        parse_mode="Markdown",
+    )
 
 
 # ОБРАБОТЧИК ГС
 @router.message(F.voice)
 async def handle_voice(message: Message):
     file_id = message.voice.file_id
-    try:
-        await process_audio(message, file_id, "voice")
-    except Exception as e:
-        logging.error(f"Ошибка обработки гс: {str(e)}")
-        return
+    await message.answer('Файл получен! Начинаю обработку, это может занять несколько минут...')
+    asyncio.create_task(process_audio(message, file_id, "voice"))
 
 # ОБРАБОТЧИК АУДИО
 @router.message(F.audio)
 async def handle_audio(message: Message):
     file_id = message.audio.file_id
-    try:
-        await process_audio(message, file_id, "audio")
-    except Exception as e:
-        logging.error(f"Ошибка обработки аудио файла: {str(e)}")
-        return
+    await message.answer('Файл получен! Начинаю обработку, это может занять несколько минут...')
+    asyncio.create_task(process_audio(message, file_id, "audio"))
 
 # ОБРАБОТЧИК ВИДЕО
 @router.message(F.content_type == "video")
@@ -243,25 +287,15 @@ async def handle_video(message: Message):
     file_id = message.video.file_id
     file_size = message.video.file_size
     logging.info(f"Размер файла: {file_size}")
-    max_size = 200 * 1024 * 1024
-    if file_size < max_size:
-        try:
-            await process_video(message, file_id)
-        except Exception as e:
-            logging.error(f"Ошибка обработки видео: {str(e)}")
-            return
-    else:
-        await message.reply("Файл слишком большой, максимальный размер 20МБ, отправьте другой файл")
+    await message.answer('Файл получен! Начинаю обработку, это может занять несколько минут...')
+    asyncio.create_task(process_video(message, file_id))
 
 # ОБРАБОТЧИК КРУЖОЧКОВ В ТГ
 @router.message(F.content_type == "video_note")
 async def handle_video_note(message: Message):
     file_id = message.video_note.file_id
-    try:
-        await process_video(message, file_id)
-    except Exception as e:
-        logging.error(f"Ошибка обработки кружочка в тг: {str(e)}")
-        return
+    await message.answer('Файл получен! Начинаю обработку, это может занять несколько минут...')
+    asyncio.create_task(process_video(message, file_id))
 
 # ОБРАБОТЧИК ФАЙЛОВ НЕ ЯВЛЯЮЩИХСЯ АУДИО ИЛИ ГС 
 @router.message(F.photo | F.document)
@@ -305,7 +339,7 @@ async def process_video(message: Message, file_id: str):
                 logging.error(f"Ошибка при удалении временных файлов: {e}")
             return
         
-        file_url = await add_file_to_storage(output_path, f"audio/{audio_file_name}")
+        file_url = await add_file_to_storage_async(output_path, f"audio/{audio_file_name}")
 
         # Получаем длительность аудио перед удалением файла
         audio = WAVE(output_path)
@@ -367,18 +401,11 @@ async def process_audio(message: Message, file_id: str, file_type: str):
         logging.info(f"Файл сохранен: {save_path}")
 
         # ПРОВЕРКА НА ЗВУК В ФАЙЛЕ
-        if not await has_audio(save_path):
-            logging.error(f"Файл не содержит звука или битый")
-            await message.answer('Файл тихий или битый, загрузите качественный аудио файл')
-            # Удаляем временный файл
-            try:
-                await aiofiles.os.remove(save_path)
-                logging.info(f"Удален временный файл: {save_path}")
-            except Exception as e:
-                logging.error(f"Ошибка при удалении временного файла: {e}")
-            return
+        #if not await has_audio(save_path):
+        #    logging.error(f"Файл не содержит звука или битый")
+        #    await message.answer('Файл тихий или битый, загрузите качественный аудио файл')
         
-        file_url = await add_file_to_storage(save_path, f"audio/{file_name}")
+        file_url = await add_file_to_storage_async(save_path, f"audio/{file_name}")
 
         # Удаляем аудио файл после загрузки в storage
         try:
@@ -421,9 +448,12 @@ async def print_price(duration: int, message: Message):
     cost = calculate_cost(duration)  # СТОИМОСТЬ
     prices = [LabeledPrice(label="XTR", amount=int(cost))] 
     await message.answer(
-        f"✅ Файл получен!\n"
-        f"Длительность: {duration // 60}:{duration % 60:02d} мин.\n"
-        f"Стоимость: {cost} XTR")
+        "✅ Получил твой файл!\n"
+        f"⏱️ Длительность: {duration // 60}:{duration % 60:02d} мин.\n"
+        f"💰 Стоимость: {cost} XTR\n"
+        "🔄 Начинаю обработку... ⚡",
+        parse_mode="Markdown",
+    )
 
     # --- ЗАГЛУШКА ОПЛАТЫ ---
     # await message.answer_invoice(
@@ -435,7 +465,7 @@ async def print_price(duration: int, message: Message):
     #     currency="XTR",
     #     reply_markup=kb.payment_keyboard(int(cost)), 
     # )
-    await message.answer("Оплата прошла успешно! Продолжаем обработку...")
+    await message.answer("Оплата прошла успешно! Начинаю обработку...")
 
 async def has_audio(audio_path: str, silence_thresh=-50.0, min_silence_len=1000) -> bool:
     audio = AudioSegment.from_file(audio_path)
