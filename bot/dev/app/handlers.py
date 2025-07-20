@@ -1,7 +1,7 @@
 from typing import Optional
 from aiogram import F, Router
 from mutagen.wave import WAVE
-from aiogram.types import Message, LabeledPrice, PreCheckoutQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, LabeledPrice, PreCheckoutQuery, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 import os
 from aiogram.filters import CommandStart, Command
 from pydub import AudioSegment
@@ -35,11 +35,10 @@ async def wait_for_transcription_completion(task_id: str, message: Message):
         new_text = f"Статус задачи: {status_text}"
         if new_text != sent_msg.text:
             try:
-                await sent_msg.edit_text(new_text)
-                sent_msg.text = new_text  # вручную обновляем, т.к. aiogram Message не обновляет text после edit
-
+                sent_msg = await sent_msg.edit_text(new_text)
             except Exception as e:
                 logging.error(f"Ошибка при обновлении статуса: {e}")
+                continue
         
         if status_text == 'FINISHED':
             result = get_result(task_id)
@@ -155,7 +154,7 @@ async def start_transcription_task(file_name: str, file_url: str, message: Messa
         task_id = start_resp.get("id")
         await message.answer(
             f"📋 Твой ID: {task_id}\n\n"
-            "💾 Сохрани на всякий случай — может пригодиться саппорту! 🆘", 
+            "💾 Сохрани на всякий случай — может пригодиться саппорту!🆘", 
             parse_mode="Markdown"
         )
         return task_id
